@@ -35,26 +35,60 @@ let lastAudioBlob = null;
 let popupAutoCloseTimer = null;
 let fsmIdleTimer = null;
 
-// Silent audio data URI to unlock audio on first interaction
-const SILENCE_SRC = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAAA';
+// Unlock audio playback on the first user interaction
 let isAudioUnlocked = false;
+let audioContext = null;
 
-function unlockAudio() {
-  if (isAudioUnlocked) return;
-  const audioEl = document.getElementById('audio-player');
-  if (audioEl) {
-    const originalSrc = audioEl.src;
-    audioEl.src = SILENCE_SRC;
-    audioEl.play()
-      .then(() => {
-        audioEl.pause();
-        audioEl.src = originalSrc;
-        isAudioUnlocked = true;
-        console.log("[AUDIO] Audio player successfully unlocked.");
-      })
-      .catch(err => {
-        console.log("[AUDIO] Audio player unlock pending gesture:", err);
-      });
+async function unlockAudio() {
+  if (isAudioUnlocked) {
+    return;
+  }
+
+  try {
+    const AudioContextClass =
+      window.AudioContext || window.webkitAudioContext;
+
+    if (!AudioContextClass) {
+      console.warn(
+        "[AUDIO] Web Audio API is not supported."
+      );
+
+      // Do not block recording if the API is unavailable.
+      isAudioUnlocked = true;
+      return;
+    }
+
+    if (!audioContext) {
+      audioContext = new AudioContextClass();
+    }
+
+    if (audioContext.state === "suspended") {
+      await audioContext.resume();
+    }
+
+    const silentBuffer = audioContext.createBuffer(
+      1,
+      1,
+      audioContext.sampleRate
+    );
+
+    const silentSource =
+      audioContext.createBufferSource();
+
+    silentSource.buffer = silentBuffer;
+    silentSource.connect(audioContext.destination);
+    silentSource.start(0);
+
+    isAudioUnlocked = true;
+
+    console.log(
+      "[AUDIO] Audio playback successfully unlocked."
+    );
+  } catch (error) {
+    console.warn(
+      "[AUDIO] Audio unlock failed:",
+      error
+    );
   }
 }
 
@@ -147,7 +181,7 @@ const sections = [
 
 micBtn.addEventListener('click', async () => {
   console.log("Record clicked");
-  unlockAudio();
+  await unlockAudio();
   if (isRecording) {
     stopRecording();
   } else {
@@ -194,10 +228,10 @@ function stopRecording() {
   micBtn.classList.remove('recording');
 }
 
-uploadInput.addEventListener('change', e => {
+uploadInput.addEventListener('change', async e => {
   const file = e.target.files[0];
   if (file) {
-    unlockAudio();
+    await unlockAudio();
     lastAudioBlob = file;
     resetUI();
     showMicStatus('captured', 'Audio Captured');
@@ -612,26 +646,26 @@ function handleSSEEvent(event) {
           console.log("[FRONTEND] No steps data found");
         }
 
-          // Show completion result row
-          appendExecLogRow('Execution Completed ✓', 'success');
-          statusText.textContent = 'Execution complete ✓';
-          // FSM transition and completion popup are driven by 'done' event at the end
+        // Show completion result row
+        appendExecLogRow('Execution Completed ✓', 'success');
+        statusText.textContent = 'Execution complete ✓';
+        // FSM transition and completion popup are driven by 'done' event at the end
 
-        } else if (status === 'requires_confirmation') {
-          setSectionState('sec-execution', 'completed');
-          appendExecLogRow(message || 'Awaiting confirmation…', 'confirm');
-          revealSection('sec-execution');
-          transitionTo(FSM_STATES.WAITING_FOR_CONFIRMATION);
+      } else if (status === 'requires_confirmation') {
+        setSectionState('sec-execution', 'completed');
+        appendExecLogRow(message || 'Awaiting confirmation…', 'confirm');
+        revealSection('sec-execution');
+        transitionTo(FSM_STATES.WAITING_FOR_CONFIRMATION);
 
-        } else if (status === 'failed') {
-          console.log('Execution failed: ' + (message || ''));
-          setSectionState('sec-execution', 'failed');
-          appendExecLogRow('Execution Failed — ' + (message || 'Unknown error'), 'failure');
-          statusText.textContent = 'Execution failed.';
-          // FSM transition and completion popup are driven by 'done' event at the end
-        }
-        break;
+      } else if (status === 'failed') {
+        console.log('Execution failed: ' + (message || ''));
+        setSectionState('sec-execution', 'failed');
+        appendExecLogRow('Execution Failed — ' + (message || 'Unknown error'), 'failure');
+        statusText.textContent = 'Execution failed.';
+        // FSM transition and completion popup are driven by 'done' event at the end
       }
+      break;
+    }
 
     // ── Response ────────────────────────────────────────────────────
     case 'response': {
@@ -1337,197 +1371,469 @@ function hideCompletionPopup() {
 document.addEventListener('DOMContentLoaded', () => {
   const closeBtn = document.getElementById('completion-popup-close-btn');
   if (closeBtn) {
-    closeBtn.addEventListener('click', () => {
-      unlockAudio();
+    closeBtn.addEventListener('click', async () => {
+      await unlockAudio();
       hideCompletionPopup();
     });
   }
 
-  // Set up logging listeners on the audio element
-  const audioEl = document.getElementById('audio-player');
-  if (audioEl) {
-    audioEl.addEventListener('play', () => {
-      console.log("Audio Playback Started");
+  // ============================================================================
+  // Audio Player Logging
+  // ============================================================================
+
+  const audioPlayer = document.getElementById("audio-player");
+
+  if (audioPlayer) {
+    audioPlayer.addEventListener("play", () => {
+      console.log("[AUDIO] Playback started");
     });
-    audioEl.addEventListener('ended', () => {
-      console.log("Playback Completed");
+
+    audioPlayer.addEventListener("ended", () => {
+      console.log("[AUDIO] Playback completed");
     });
-    audioEl.addEventListener('error', (e) => {
-      console.error("Playback Failed", e);
+
+    audioPlayer.addEventListener("error", () => {
+      const declaredSource =
+        audioPlayer.getAttribute("src");
+
+      if (!declaredSource) {
+        return;
+      }
+
+      const source =
+        audioPlayer.currentSrc || declaredSource;
+
+      const error = audioPlayer.error;
+
+      console.error("[AUDIO] Playback failed:", {
+        code: error?.code,
+        message: error?.message,
+        src: source,
+        networkState: audioPlayer.networkState,
+        readyState: audioPlayer.readyState,
+      });
+
+      switch (error?.code) {
+        case MediaError.MEDIA_ERR_ABORTED:
+          console.error("[AUDIO] Audio loading was aborted.");
+          break;
+
+        case MediaError.MEDIA_ERR_NETWORK:
+          console.error("[AUDIO] Network error while loading audio.");
+          break;
+
+        case MediaError.MEDIA_ERR_DECODE:
+          console.error(
+            "[AUDIO] Audio file could not be decoded or is corrupted."
+          );
+          break;
+
+        case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+          console.error(
+            "[AUDIO] Audio source is empty, invalid, or unsupported."
+          );
+          break;
+
+        default:
+          console.error("[AUDIO] Unknown playback error.");
+      }
     });
+  } else {
+    console.warn("[AUDIO] #audio-player element not found.");
   }
-});
 
-// File Search Modal logic
-function showFileSearchModal(results) {
-  console.log("================================================================================");
-  console.log("[MODAL] ENTER showFileSearchModal");
-  console.log("[MODAL] Results received:", results);
-  console.log("[MODAL] Results count:", results ? results.length : 0);
+  // ============================================================================
+  // File Search Modal Logic
+  // ============================================================================
 
-  const modal = document.getElementById('file-search-modal');
-  const resultsContainer = document.getElementById('file-search-results');
-  const actionsContainer = document.getElementById('file-search-actions');
+  function showFileSearchModal(results) {
+    console.log(
+      "================================================================================"
+    );
+    console.log("[MODAL] ENTER showFileSearchModal");
+    console.log("[MODAL] Results received:", results);
+    console.log(
+      "[MODAL] Results count:",
+      results ? results.length : 0
+    );
 
-  console.log("[MODAL] Modal element:", modal);
-  console.log("[MODAL] Results container:", resultsContainer);
-  console.log("[MODAL] Actions container:", actionsContainer);
+    const modal = document.getElementById("file-search-modal");
+    const resultsContainer =
+      document.getElementById("file-search-results");
+    const actionsContainer =
+      document.getElementById("file-search-actions");
 
-  if (!modal || !resultsContainer || !actionsContainer) {
-    console.error("[MODAL] Missing required elements:");
-    if (!modal) console.error("[MODAL] - modal is null");
-    if (!resultsContainer) console.error("[MODAL] - resultsContainer is null");
-    if (!actionsContainer) console.error("[MODAL] - actionsContainer is null");
-    return;
-  }
+    console.log("[MODAL] Modal element:", modal);
+    console.log("[MODAL] Results container:", resultsContainer);
+    console.log("[MODAL] Actions container:", actionsContainer);
 
-  console.log("[MODAL] All elements found, clearing containers");
-  resultsContainer.innerHTML = '';
-  actionsContainer.innerHTML = '';
+    if (!modal || !resultsContainer || !actionsContainer) {
+      console.error("[MODAL] Missing required elements:");
 
-  console.log("[MODAL] Processing results...");
-  results.forEach((res, index) => {
-    console.log(`[MODAL] Processing result ${index + 1}:`, res);
-    const num = index + 1;
-    const filename = res.filename || `Document ${num}`;
-    const div = document.createElement('div');
-    div.style.padding = '12px';
-    div.style.border = '1px solid var(--border, #eee)';
-    div.style.borderRadius = '8px';
-    div.style.background = '#fafafa';
+      if (!modal) {
+        console.error("[MODAL] - modal is null");
+      }
 
-    div.innerHTML = `
-      <div class="doc-item-title" style="font-weight: 600; color: var(--primary, #007bff); cursor: pointer;">${num}. ${escapeHtml(filename)}</div>
-      <div style="font-size: 0.85rem; color: #555; margin-top: 4px;">Folder: ${escapeHtml(res.folder_path || res.folder || '')}</div>
-      <div style="font-size: 0.85rem; color: #555;">Modified: ${escapeHtml(res.modified_date || (res.modified_ts ? new Date(res.modified_ts * 1000).toDateString() : 'N/A'))}</div>
-      <div style="font-size: 0.85rem; color: #555;">Confidence: ${escapeHtml(res.confidence || (res.score ? Math.round(res.score * 100) + '%' : 'N/A'))}</div>
-    `;
-    const titleEl = div.querySelector('.doc-item-title');
-    if (titleEl) {
-      titleEl.onclick = () => {
-        modal.style.display = 'none';
-        showDocumentOpenConfirmation(num, filename);
+      if (!resultsContainer) {
+        console.error("[MODAL] - resultsContainer is null");
+      }
+
+      if (!actionsContainer) {
+        console.error("[MODAL] - actionsContainer is null");
+      }
+
+      return;
+    }
+
+    console.log("[MODAL] All elements found, clearing containers");
+
+    resultsContainer.innerHTML = "";
+    actionsContainer.innerHTML = "";
+
+    const safeResults = Array.isArray(results) ? results : [];
+
+    console.log("[MODAL] Processing results...");
+
+    safeResults.forEach((res, index) => {
+      console.log(
+        `[MODAL] Processing result ${index + 1}:`,
+        res
+      );
+
+      const num = index + 1;
+      const filename =
+        res.filename || `Document ${num}`;
+
+      const folderPath =
+        res.folder_path ||
+        res.folder ||
+        "";
+
+      const modifiedDate =
+        res.modified_date ||
+        (
+          res.modified_ts
+            ? new Date(
+              res.modified_ts * 1000
+            ).toDateString()
+            : "N/A"
+        );
+
+      const confidence =
+        res.confidence ||
+        (
+          res.score
+            ? `${Math.round(res.score * 100)}%`
+            : "N/A"
+        );
+
+      const div = document.createElement("div");
+
+      div.style.padding = "12px";
+      div.style.border =
+        "1px solid var(--border, #eee)";
+      div.style.borderRadius = "8px";
+      div.style.background = "#fafafa";
+
+      div.innerHTML = `
+        <div
+          class="doc-item-title"
+          style="
+            font-weight: 600;
+            color: var(--primary, #007bff);
+            cursor: pointer;
+          "
+        >
+          ${num}. ${escapeHtml(filename)}
+        </div>
+
+        <div
+          style="
+            font-size: 0.85rem;
+            color: #555;
+            margin-top: 4px;
+          "
+        >
+          Folder: ${escapeHtml(folderPath)}
+        </div>
+
+        <div
+          style="
+            font-size: 0.85rem;
+            color: #555;
+          "
+        >
+          Modified: ${escapeHtml(modifiedDate)}
+        </div>
+
+        <div
+          style="
+            font-size: 0.85rem;
+            color: #555;
+          "
+        >
+          Confidence: ${escapeHtml(confidence)}
+        </div>
+      `;
+
+      const titleEl =
+        div.querySelector(".doc-item-title");
+
+      if (titleEl) {
+        titleEl.onclick = () => {
+          modal.style.display = "none";
+
+          showDocumentOpenConfirmation(
+            num,
+            filename
+          );
+        };
+      }
+
+      resultsContainer.appendChild(div);
+
+      console.log(
+        `[MODAL] Added result ${num} to container`
+      );
+
+      const btn = document.createElement("button");
+
+      btn.className = "btn btn-primary";
+      btn.style.padding = "6px 12px";
+      btn.style.fontSize = "0.85rem";
+      btn.textContent = `Open number ${num}`;
+
+      btn.onclick = () => {
+        console.log(
+          `[MODAL] Button ${num} clicked. ` +
+          "Hiding search modal and showing confirmation popup."
+        );
+
+        modal.style.display = "none";
+
+        showDocumentOpenConfirmation(
+          num,
+          filename
+        );
       };
-    }
-    resultsContainer.appendChild(div);
-    console.log(`[MODAL] Added result ${num} to container`);
 
-    const btn = document.createElement('button');
-    btn.className = 'btn btn-primary';
-    btn.style.padding = '6px 12px';
-    btn.style.fontSize = '0.85rem';
-    btn.textContent = `Open number ${num}`;
-    btn.onclick = () => {
-      console.log(`[MODAL] Button ${num} clicked. Hiding search modal and showing confirmation popup.`);
-      modal.style.display = 'none';
-      showDocumentOpenConfirmation(num, filename);
+      actionsContainer.appendChild(btn);
+
+      console.log(
+        `[MODAL] Added button ${num} to actions`
+      );
+    });
+
+    const cancelBtn =
+      document.createElement("button");
+
+    cancelBtn.className =
+      "btn btn-cancel-action";
+
+    cancelBtn.style.padding = "6px 12px";
+    cancelBtn.style.fontSize = "0.85rem";
+    cancelBtn.textContent = "Cancel";
+
+    cancelBtn.onclick = () => {
+      console.log(
+        "[MODAL] Cancel button clicked, hiding modal"
+      );
+
+      modal.style.display = "none";
+      modal.classList.add("hidden");
     };
-    actionsContainer.appendChild(btn);
-    console.log(`[MODAL] Added button ${num} to actions`);
-  });
 
-  const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'btn btn-cancel-action';
-  cancelBtn.style.padding = '6px 12px';
-  cancelBtn.style.fontSize = '0.85rem';
-  cancelBtn.textContent = 'Cancel';
-  cancelBtn.onclick = () => {
-    console.log("[MODAL] Cancel button clicked, hiding modal");
-    modal.style.display = 'none';
-  };
-  actionsContainer.appendChild(cancelBtn);
-  console.log("[MODAL] Added cancel button");
+    actionsContainer.appendChild(cancelBtn);
 
-  console.log("[MODAL] Setting modal display to flex");
-  modal.classList.remove('hidden');
-  modal.style.display = 'flex';
-  console.log("[MODAL] EXIT showFileSearchModal");
-}
+    console.log("[MODAL] Added cancel button");
+    console.log(
+      "[MODAL] Setting modal display to flex"
+    );
 
-let isOpeningDocument = false;
+    modal.classList.remove("hidden");
+    modal.style.display = "flex";
 
-async function simulateUserCommand(text) {
-  if (isOpeningDocument) return;
-  isOpeningDocument = true;
-  try {
-    const formData = new FormData();
-    formData.append('text', text);
-    const res = await fetch('/transcribe_stream', { method: 'POST', body: formData });
-    if (res.ok) await consumeSSEStream(res.body);
-  } catch (e) {
-    console.error(e);
-  } finally {
-    setTimeout(() => { isOpeningDocument = false; }, 1000);
-  }
-}
-
-// Permission Layer Confirmation Popup
-function showDocumentOpenConfirmation(num, filename) {
-  const confirmModal = document.getElementById('doc-confirm-modal');
-  const confirmMessage = document.getElementById('doc-confirm-message');
-  const openBtn = document.getElementById('doc-confirm-open-btn');
-  const cancelBtn = document.getElementById('doc-confirm-cancel-btn');
-
-  if (!confirmModal || !openBtn || !cancelBtn) {
-    console.error("[CONFIRM MODAL] Required elements missing.");
-    simulateUserCommand(`Open number ${num}`);
-    return;
+    console.log("[MODAL] EXIT showFileSearchModal");
   }
 
-  if (confirmMessage) {
-    confirmMessage.textContent = `Are you sure you want to open document ${num} (${filename})?`;
-  }
+  let isOpeningDocument = false;
 
-  confirmModal.classList.remove('hidden');
-  confirmModal.style.display = 'flex';
-
-  openBtn.onclick = () => {
-    confirmModal.style.display = 'none';
-    confirmModal.classList.add('hidden');
-    console.log(`[CONFIRM MODAL] User confirmed opening document number ${num}`);
-    simulateUserCommand(`Open number ${num}`);
-  };
-
-  cancelBtn.onclick = () => {
-    confirmModal.style.display = 'none';
-    confirmModal.classList.add('hidden');
-    console.log("[CONFIRM MODAL] User cancelled document opening.");
-  };
-}
-
-// ============================================================================
-// File Search Modal Helper
-// ============================================================================
-
-function closeFileSearchModal() {
-  const modal = document.getElementById('file-search-modal');
-  if (modal) {
-    modal.style.display = 'none';
-    modal.classList.add('hidden');
-  }
-}
-
-// Ensure the helper is defined
-function sendTextCommand(text) {
-  statusText.textContent = '';
-  transitionTo(FSM_STATES.PROCESSING);
-
-  // Abort any previous stream
-  if (activeStreamController) activeStreamController.abort();
-  activeStreamController = new AbortController();
-
-  const formData = new FormData();
-  formData.append('text', text);
-
-  fetch('/transcribe_stream', {
-    method: 'POST',
-    body: formData,
-    signal: activeStreamController.signal,
-  }).then(res => {
-    if (res.ok) {
-      consumeSSEStream(res.body);
-    } else {
-      console.error("Text command failed", res.status);
+  async function simulateUserCommand(text) {
+    if (isOpeningDocument) {
+      return;
     }
-  }).catch(err => console.error(err));
-}
+
+    isOpeningDocument = true;
+
+    try {
+      const formData = new FormData();
+      formData.append("text", text);
+
+      const response = await fetch(
+        "/transcribe_stream",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      if (!response.ok) {
+        console.error(
+          "[DOCUMENT] Command request failed:",
+          response.status
+        );
+        return;
+      }
+
+      await consumeSSEStream(response.body);
+    } catch (error) {
+      console.error(
+        "[DOCUMENT] Command execution failed:",
+        error
+      );
+    } finally {
+      setTimeout(() => {
+        isOpeningDocument = false;
+      }, 1000);
+    }
+  }
+
+  // ============================================================================
+  // Permission Layer Confirmation Popup
+  // ============================================================================
+
+  function showDocumentOpenConfirmation(
+    num,
+    filename
+  ) {
+    const confirmModal =
+      document.getElementById("doc-confirm-modal");
+
+    const confirmMessage =
+      document.getElementById(
+        "doc-confirm-message"
+      );
+
+    const openBtn =
+      document.getElementById(
+        "doc-confirm-open-btn"
+      );
+
+    const cancelBtn =
+      document.getElementById(
+        "doc-confirm-cancel-btn"
+      );
+
+    if (!confirmModal || !openBtn || !cancelBtn) {
+      console.error(
+        "[CONFIRM MODAL] Required elements missing."
+      );
+
+      simulateUserCommand(
+        `Open number ${num}`
+      );
+
+      return;
+    }
+
+    if (confirmMessage) {
+      confirmMessage.textContent =
+        `Are you sure you want to open ` +
+        `document ${num} (${filename})?`;
+    }
+
+    confirmModal.classList.remove("hidden");
+    confirmModal.style.display = "flex";
+
+    openBtn.onclick = () => {
+      confirmModal.style.display = "none";
+      confirmModal.classList.add("hidden");
+
+      console.log(
+        `[CONFIRM MODAL] User confirmed ` +
+        `opening document number ${num}`
+      );
+
+      simulateUserCommand(
+        `Open number ${num}`
+      );
+    };
+
+    cancelBtn.onclick = () => {
+      confirmModal.style.display = "none";
+      confirmModal.classList.add("hidden");
+
+      console.log(
+        "[CONFIRM MODAL] User cancelled document opening."
+      );
+    };
+  }
+
+  // ============================================================================
+  // File Search Modal Helper
+  // ============================================================================
+
+  function closeFileSearchModal() {
+    const modal =
+      document.getElementById("file-search-modal");
+
+    if (modal) {
+      modal.style.display = "none";
+      modal.classList.add("hidden");
+    }
+  }
+
+  // ============================================================================
+  // Text Command Helper
+  // ============================================================================
+
+  function sendTextCommand(text) {
+    if (statusText) {
+      statusText.textContent = "";
+    }
+
+    transitionTo(FSM_STATES.PROCESSING);
+
+    // Abort any previous stream.
+    if (activeStreamController) {
+      activeStreamController.abort();
+    }
+
+    activeStreamController =
+      new AbortController();
+
+    const formData = new FormData();
+    formData.append("text", text);
+
+    fetch("/transcribe_stream", {
+      method: "POST",
+      body: formData,
+      signal: activeStreamController.signal,
+    })
+      .then((response) => {
+        if (!response.ok) {
+          console.error(
+            "[TEXT COMMAND] Request failed:",
+            response.status
+          );
+          return;
+        }
+
+        return consumeSSEStream(response.body);
+      })
+      .catch((error) => {
+        if (error.name === "AbortError") {
+          console.log(
+            "[TEXT COMMAND] Previous request aborted."
+          );
+          return;
+        }
+
+        console.error(
+          "[TEXT COMMAND] Request error:",
+          error
+        );
+      });
+  }
+
+}); 
