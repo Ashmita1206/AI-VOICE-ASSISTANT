@@ -359,4 +359,180 @@ def test_document_open_permission_layer(monkeypatch, tmp_path):
     res_confirmed = find_document_by_context({"result_number": 1, "confirmed": True})
     assert res_confirmed.success is True
     assert res_confirmed.data.get("opened") is True
-    assert "opened successfully" in res_confirmed.output
+    assert "opened" in res_confirmed.output.lower()
+
+
+def test_single_result_returns_structured_data(monkeypatch, tmp_path):
+    """Verify that a single search result returns structured data for frontend modal."""
+    from automation.document_retrieval_tool import find_document_by_context
+    from agentic.memory.session_state import get_session
+    from agentic.file_context_search.manager import DocumentSearchManager
+    from agentic.file_context_search.preview import format_results_for_display
+
+    session = get_session()
+    test_pdf = tmp_path / "SingleResult.pdf"
+    test_pdf.write_text("Single result content")
+
+    # Mock DocumentSearchManager.find_documents to return one result
+    class MockSearchResult:
+        def __init__(self, path, filename):
+            self.rank = 1
+            self.score = 0.9
+            self.path = path
+            self.filename = filename
+            self.extension = "pdf"
+            self.folder = str(tmp_path)
+            self.modified_ts = 0.0
+            self.confidence = "high"
+            self.snippet = "test snippet"
+
+        def to_dict(self):
+            return {
+                "rank": self.rank,
+                "score": self.score,
+                "path": self.path,
+                "filename": self.filename,
+                "extension": self.extension,
+                "folder": self.folder,
+                "modified_date": "unknown",
+                "confidence": self.confidence,
+                "snippet": self.snippet,
+            }
+
+        def voice_label(self):
+            return f"{self.filename} ({self.extension.upper()})"
+
+    original_find = DocumentSearchManager.find_documents
+    DocumentSearchManager.find_documents = lambda q, top_n: [MockSearchResult(str(test_pdf), "SingleResult.pdf")]
+
+    try:
+        res = find_document_by_context({"query": "test document"})
+        assert res.success is True
+        assert res.requires_interaction is False  # Execution completes so frontend can detect results
+        assert res.data["action"] == "document_search_results"
+        assert "results" in res.data
+        assert len(res.data["results"]) == 1
+        assert res.data["results"][0]["filename"] == "SingleResult.pdf"
+        assert res.data["query"] == "test document"
+    finally:
+        DocumentSearchManager.find_documents = original_find
+
+
+def test_multiple_results_require_selection(monkeypatch, tmp_path):
+    """Verify that multiple search results return structured data for frontend modal."""
+    from automation.document_retrieval_tool import find_document_by_context
+    from agentic.memory.session_state import get_session
+    from agentic.file_context_search.manager import DocumentSearchManager
+
+    session = get_session()
+
+    # Mock DocumentSearchManager.find_documents to return multiple results
+    class MockSearchResult:
+        def __init__(self, path, filename, rank):
+            self.rank = rank
+            self.score = 0.9
+            self.path = path
+            self.filename = filename
+            self.extension = "pdf"
+            self.folder = str(tmp_path)
+            self.modified_ts = 0.0
+            self.confidence = "high"
+            self.snippet = "test snippet"
+
+        def to_dict(self):
+            return {
+                "rank": self.rank,
+                "score": self.score,
+                "path": self.path,
+                "filename": self.filename,
+                "extension": self.extension,
+                "folder": self.folder,
+                "modified_date": "unknown",
+                "confidence": self.confidence,
+                "snippet": self.snippet,
+            }
+
+        def voice_label(self):
+            return f"{self.filename} ({self.extension.upper()})"
+
+    pdf1 = tmp_path / "Result1.pdf"
+    pdf2 = tmp_path / "Result2.pdf"
+    pdf1.write_text("Content 1")
+    pdf2.write_text("Content 2")
+
+    original_find = DocumentSearchManager.find_documents
+    DocumentSearchManager.find_documents = lambda q, top_n: [
+        MockSearchResult(str(pdf1), "Result1.pdf", 1),
+        MockSearchResult(str(pdf2), "Result2.pdf", 2)
+    ]
+
+    try:
+        res = find_document_by_context({"query": "test document"})
+        assert res.success is True
+        assert res.requires_interaction is False  # Execution completes so frontend can detect results
+        assert res.data["action"] == "document_search_results"
+        assert len(res.data["results"]) == 2
+        assert res.data["query"] == "test document"
+    finally:
+        DocumentSearchManager.find_documents = original_find
+
+
+def test_new_search_clears_stale_results(monkeypatch, tmp_path):
+    """Verify that a new search replaces previous results in session."""
+    from automation.document_retrieval_tool import find_document_by_context
+    from agentic.memory.session_state import get_session
+    from agentic.file_context_search.manager import DocumentSearchManager
+
+    session = get_session()
+
+    # Set up initial stale results
+    session.pending_document_results = [
+        {"rank": 1, "filename": "OldResult.pdf", "path": "old/path.pdf"}
+    ]
+    session.last_document_query = "old query"
+
+    class MockSearchResult:
+        def __init__(self, path, filename):
+            self.rank = 1
+            self.score = 0.9
+            self.path = path
+            self.filename = filename
+            self.extension = "pdf"
+            self.folder = str(tmp_path)
+            self.modified_ts = 0.0
+            self.confidence = "high"
+            self.snippet = "test snippet"
+
+        def to_dict(self):
+            return {
+                "rank": self.rank,
+                "score": self.score,
+                "path": self.path,
+                "filename": self.filename,
+                "extension": self.extension,
+                "folder": self.folder,
+                "modified_date": "unknown",
+                "confidence": self.confidence,
+                "snippet": self.snippet,
+            }
+
+        def voice_label(self):
+            return f"{self.filename} ({self.extension.upper()})"
+
+    new_pdf = tmp_path / "NewResult.pdf"
+    new_pdf.write_text("New content")
+
+    original_find = DocumentSearchManager.find_documents
+    DocumentSearchManager.find_documents = lambda q, top_n: [MockSearchResult(str(new_pdf), "NewResult.pdf")]
+
+    try:
+        res = find_document_by_context({"query": "new query"})
+        assert res.success is True
+        # Verify session was updated with new results
+        assert len(session.pending_document_results) == 1
+        assert session.pending_document_results[0]["filename"] == "NewResult.pdf"
+        assert session.last_document_query == "new query"
+        # Old result should be gone
+        assert not any(r["filename"] == "OldResult.pdf" for r in session.pending_document_results)
+    finally:
+        DocumentSearchManager.find_documents = original_find

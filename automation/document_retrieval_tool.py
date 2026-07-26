@@ -84,7 +84,7 @@ def find_document_by_context(args: dict[str, Any]) -> ExecutionResult:
                 message="No pending search results to open.",
                 tool="find_document_by_context"
             )
-            
+
         if not (1 <= result_num <= len(pending)):
             logger.warning("[DOC OPEN] Invalid result number %d (available: 1..%d)", result_num, len(pending))
             print(f"[DOC OPEN] Invalid result number {result_num} (available: 1..{len(pending)})")
@@ -101,6 +101,25 @@ def find_document_by_context(args: dict[str, Any]) -> ExecutionResult:
 
         logger.info("[DOC OPEN] Resolved path : %s", file_path)
         print(f"[DOC OPEN] Resolved path : {file_path}")
+
+        # ── PERMISSION CHECK: Require confirmation before opening ─────────
+        confirmed = args.get("confirmed", False)
+        if not confirmed:
+            logger.info("[DOC OPEN] Permission not yet granted. Requesting confirmation.")
+            print("[DOC OPEN] Permission not yet granted. Requesting confirmation.")
+            return ExecutionResult(
+                success=True,
+                output=f"You are about to open: {filename}",
+                message=f"Open document {result_num}: {filename}?",
+                tool="find_document_by_context",
+                requires_interaction=True,
+                data={
+                    "action": "open_permission_required",
+                    "filename": filename,
+                    "path": file_path,
+                    "result_number": result_num
+                }
+            )
 
         exists = bool(file_path and os.path.exists(file_path))
         logger.info("[DOC OPEN] Exists : %s", exists)
@@ -210,28 +229,23 @@ def find_document_by_context(args: dict[str, Any]) -> ExecutionResult:
     logger.info("[DOC SEARCH] Stored %d results in session", len(display_data))
     print(f"[DOC SEARCH] Stored {len(display_data)} results in session")
 
-    # SCENARIO 1: If there is only ONE high-confidence result, immediately open that file using the OS!
+    # SCENARIO 1: If there is only ONE high-confidence result, let execution complete so frontend shows modal
     if len(results) == 1:
         single_path = results[0].path
         single_name = results[0].filename
-        if os.path.exists(single_path):
-            opened = DocumentRetrievalManager.open_result(single_path)
-            if opened:
-                logger.info("[TOOL] [SCENARIO 1] Single result found. Immediately opening: %s", single_path)
-                return ExecutionResult(
-                    success=True,
-                    output=f"I found 1 matching file and opened {single_name}.",
-                    message=f"Opening {single_name}.",
-                    tool="find_document_by_context",
-                    requires_interaction=False,  # Immediately opened, no modal popup required
-                    data={
-                        "opened": True,
-                        "path": single_path,
-                        "results": display_data,
-                        "query": query_str,
-                        "action": "document_opened"
-                    }
-                )
+        logger.info("[TOOL] [SCENARIO 1] Single result found. Returning results for frontend modal: %s", single_path)
+        return ExecutionResult(
+            success=True,
+            output=f"I found 1 matching file: {single_name}.",
+            message=f"Found 1 matching file: {single_name}.",
+            tool="find_document_by_context",
+            requires_interaction=False,  # Let execution complete; frontend will detect results and show modal
+            data={
+                "results": display_data,
+                "query": query_str,
+                "action": "document_search_results"
+            }
+        )
 
     # SCENARIO 2: Multiple results returned -> display popup and wait for user selection
     voice_text = format_results_for_voice(results)
@@ -240,7 +254,7 @@ def find_document_by_context(args: dict[str, Any]) -> ExecutionResult:
         output=voice_text,
         message=voice_text,
         tool="find_document_by_context",
-        requires_interaction=True,  # Signal frontend to display modal popup
+        requires_interaction=False,  # Let execution complete; frontend will detect results and show modal
         data={
             "results": display_data,
             "query": query_str,
