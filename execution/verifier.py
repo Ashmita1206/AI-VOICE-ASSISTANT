@@ -651,9 +651,40 @@ def dispatch_verify(tool: str, args: dict, result) -> VerifyResult:
 
     # Notepad save operations
     if tool in ("notepad_save", "notepad_save_as"):
+        import os
+        from pathlib import Path
+
+        # PRIORITY 1: Use the actual saved_path returned by the save operation
+        saved_path = getattr(result, "saved_path", None)
+        if saved_path:
+            # Normalize the path safely
+            normalized_path = Path(
+                os.path.expandvars(
+                    os.path.expanduser(str(saved_path).strip().strip('"').strip("'"))
+                )
+            )
+            logger.info(
+                f"[VERIFY][SAVE] Using saved_path from result: '{saved_path}' | "
+                f"Normalized: '{normalized_path}'"
+            )
+            if normalized_path.exists():
+                return VerifyResult(
+                    passed=True,
+                    message=f"Notepad save verified successfully: '{normalized_path}'"
+                )
+            return VerifyResult(
+                passed=False,
+                message=(
+                    f"Save verification failed.\n"
+                    f"Returned saved path: '{saved_path}'\n"
+                    f"Normalized verification path: '{normalized_path}'\n"
+                    f"Exists: False"
+                )
+            )
+
+        # PRIORITY 2: If no saved_path, compute from current operation args
         filename = args.get("filename", "")
         directory = args.get("directory", None)
-        import os
 
         # Dynamic query for the correct Desktop path (resolves OneDrive etc.)
         def _get_desktop_path() -> str:
@@ -672,7 +703,7 @@ def dispatch_verify(tool: str, args: dict, result) -> VerifyResult:
             if os.path.exists(onedrive_desktop):
                 return onedrive_desktop
             return os.path.join(home, "Desktop")
-        
+
         # If no filename is provided for notepad_save, check window title or default file
         if not filename and tool == "notepad_save":
             from automation.notepad import _controller
@@ -690,7 +721,7 @@ def dispatch_verify(tool: str, args: dict, result) -> VerifyResult:
             if os.path.exists(default_file):
                 return VerifyResult(passed=True, message=f"Save verified: File '{default_file}' exists on disk.")
             return VerifyResult(passed=False, message="Save verification failed: Document is still untitled and no desktop file was found.")
-            
+
         # Resolve common directories like Desktop/Documents if directory is a placeholder
         if directory:
             dir_lower = directory.lower()
@@ -720,45 +751,39 @@ def dispatch_verify(tool: str, args: dict, result) -> VerifyResult:
                         directory = os.path.abspath(os.path.expandvars(reg_val))
                 except Exception:
                     directory = os.path.join(os.path.expanduser("~"), "Pictures")
-                
+
         if directory:
             filepath = os.path.join(directory, filename)
         else:
             filepath = filename
         filepath = os.path.abspath(filepath)
-        
-        # Build target verification path for aiml.txt on the Desktop as fallback
-        desktop_path = _get_desktop_path()
-        aiml_path = os.path.join(desktop_path, "aiml.txt")
 
         logger.info(
-            f"[VERIFY][SAVE] filename received: '{filename}' | "
-            f"directory received: '{args.get('directory')}'"
-        )
-        logger.info(
-            f"[VERIFY][SAVE] computed expected path: '{filepath}' | "
-            f"fallback aiml.txt path: '{aiml_path}'"
+            f"[VERIFY][SAVE] No saved_path in result. Using computed path from args.\n"
+            f"filename: '{filename}' | directory: '{args.get('directory')}' | "
+            f"computed path: '{filepath}'"
         )
 
-        actual_path = None
-        if os.path.exists(filepath):
-            actual_path = filepath
-        elif os.path.exists(aiml_path):
-            actual_path = aiml_path
+        # Normalize and check the computed path
+        normalized_path = Path(
+            os.path.expandvars(
+                os.path.expanduser(str(filepath).strip().strip('"').strip("'"))
+            )
+        )
 
-        logger.info(f"[VERIFY][SAVE] actual path saved: '{actual_path}'")
-
-        if actual_path:
+        if normalized_path.exists():
             return VerifyResult(
-                passed=True, 
-                message=f"Save verified: File '{actual_path}' exists on disk."
+                passed=True,
+                message=f"Save verified: File '{normalized_path}' exists on disk."
             )
 
         return VerifyResult(
-            passed=False, 
+            passed=False,
             message=(
-                f"Save verification failed: Neither the expected file '{filepath}' "
-                f"nor the target file '{aiml_path}' exists on disk."
+                f"Save verification failed.\n"
+                f"Computed verification path: '{normalized_path}'\n"
+                f"Exists: False\n"
+                f"Current operation filename: '{filename}'"
             )
         )
 

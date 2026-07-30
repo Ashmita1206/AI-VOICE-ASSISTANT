@@ -21,6 +21,7 @@ if sys.platform.startswith("win") and not hasattr(sys.stdout, "_pytest_captured_
 # Ensure project root is on the path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# pyrefly: ignore [missing-import]
 from flask import Flask, render_template
 from flask_cors import CORS
 
