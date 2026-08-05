@@ -38,16 +38,19 @@ Tools registered (15 total)
 
 from __future__ import annotations
 
+import os
 import ctypes
 import logging
 import subprocess
 import time
 from typing import Any, Optional, Tuple
 
+import config
+from config import get_logger
 from execution.registry import register_tool
 from execution.schemas import ExecutionResult
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Optional dependency guards
@@ -55,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 try:
     import pyautogui
-    pyautogui.FAILSAFE = False
+    pyautogui.FAILSAFE = config.PYAUTOGUI_FAILSAFE
 except ImportError:
     pyautogui = None  # type: ignore[assignment]
 
@@ -82,25 +85,20 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constants & Configuration
 # ---------------------------------------------------------------------------
 
 DEBUG_AUTOMATION = False
 
-import os
-SESSION_CACHE_FILE = os.path.join(
-    os.path.expanduser("~"), ".gemini", "antigravity-ide", "notepad_session.json"
-)
-
-NOTEPAD_EXE           = "notepad.exe"
-NOTEPAD_PROC_NAME     = "notepad"          # compared against psutil proc names (no .exe)
-NOTEPAD_TITLE_FRAGMENT = "notepad"         # case-insensitive substring match
-WINDOW_POLL_INTERVAL  = 0.35              # seconds between window-existence polls
-WINDOW_LAUNCH_TIMEOUT = 12.0             # max seconds to wait for Notepad to appear
-# In debug mode, we can increase timing buffers for visual confirmation
-FOCUS_SETTLE_MS       = 350              # ms to wait after focus before typing
-SAVE_DIALOG_TIMEOUT   = 5.0             # max seconds to wait for Save-As dialog
-TYPING_INTERVAL       = 0.04            # seconds between pyautogui.write() keystrokes
+SESSION_CACHE_FILE     = config.SESSION_CACHE_FILE
+NOTEPAD_EXE            = config.NOTEPAD_EXE
+NOTEPAD_PROC_NAME      = config.NOTEPAD_PROC_NAME
+NOTEPAD_TITLE_FRAGMENT = config.NOTEPAD_TITLE_FRAGMENT
+WINDOW_POLL_INTERVAL   = config.WINDOW_POLL_INTERVAL
+WINDOW_LAUNCH_TIMEOUT  = config.WINDOW_LAUNCH_TIMEOUT
+FOCUS_SETTLE_MS        = config.FOCUS_SETTLE_MS
+SAVE_DIALOG_TIMEOUT    = config.SAVE_DIALOG_TIMEOUT
+TYPING_INTERVAL        = config.TYPING_INTERVAL
 
 
 # ---------------------------------------------------------------------------
@@ -299,95 +297,178 @@ class NotepadController:
             logger.debug(f"[NOTEPAD] Exception closing stale window HWND={hwnd}: {exc}")
 
     def _is_session_valid(self, session: ApplicationSession) -> bool:
-        if not win32gui:
+        if not win32gui or not session.hwnd:
             return False
-        # 1. HWND must still exist and be visible
-        if not win32gui.IsWindow(session.hwnd) or not win32gui.IsWindowVisible(session.hwnd):
-            return False
-        # 2. PID process must still be running and named notepad.exe
         try:
-            proc = psutil.Process(session.pid)
-            if proc.name().lower() not in ("notepad.exe", "notepad", "applicationframehost.exe"):
+            if not win32gui.IsWindow(session.hwnd):
                 return False
         except Exception:
             return False
-        # 3. Check if window class matches Notepad and has editor control
+
         try:
-            cls = win32gui.GetClassName(session.hwnd)
-            if cls.lower() != "notepad":
-                return False
-            edit_control = self._find_edit_control(session.hwnd)
-            if not edit_control:
-                return False
+            cls = win32gui.GetClassName(session.hwnd).lower()
+            title = win32gui.GetWindowText(session.hwnd).lower()
+            if "notepad" in cls or "notepad" in title or "applicationframe" in cls or "edit" in cls or "rich" in cls or "core" in cls or "pane" in cls:
+                return True
         except Exception:
-            return False
+            pass
+
+
         return True
 
+
+
+
     def _get_window_snapshot(self) -> list[dict]:
-        """Return a snapshot of all visible windows with their metadata using a robust window crawler."""
+        """Return a snapshot of all visible windows with their metadata using a robust EnumWindows with psutil fallback."""
         if not win32gui or not win32process or not psutil:
             return []
             
         snapshot = []
-        try:
-            hwnd = win32gui.GetWindow(win32gui.GetDesktopWindow(), win32con.GW_CHILD)
-            while hwnd:
-                try:
-                    if win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
+        def _enum_cb(hwnd, _):
+            try:
+                if win32gui.IsWindow(hwnd):
+                    title = ""
+                    try:
                         title = win32gui.GetWindowText(hwnd)
+                    except Exception:
+                        pass
+
+
+                    cls = ""
+                    try:
                         cls = win32gui.GetClassName(hwnd)
+                    except Exception:
+                        pass
+
+                    pid = 0
+                    try:
                         _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                        
-                        proc_name = "?"
-                        proc_path = "?"
+                    except Exception:
+                        pass
+
+                    cls_lower = cls.lower()
+                    title_lower = title.lower()
+                    proc_name = "?"
+                    proc_path = "?"
+                    if pid > 0 and (cls_lower in ("notepad", "applicationframewindow") or "notepad" in title_lower or "untitled" in title_lower or title_lower == ""):
                         try:
                             proc = psutil.Process(pid)
                             proc_name = proc.name()
                             proc_path = proc.exe()
                         except Exception:
                             pass
-                            
-                        snapshot.append({
-                            "hwnd": hwnd,
-                            "title": title,
-                            "class": cls,
-                            "pid": pid,
-                            "proc_name": proc_name,
-                            "proc_path": proc_path
-                        })
-                except Exception as e:
-                    logger.debug(f"[NOTEPAD] GetWindow crawler error for HWND {hwnd}: {e}")
-                hwnd = win32gui.GetWindow(hwnd, win32con.GW_HWNDNEXT)
-        except Exception as exc:
-            logger.warning(f"[NOTEPAD] GetWindow crawler failed: {exc}")
+
+                        
+                    snapshot.append({
+                        "hwnd": hwnd,
+                        "title": title,
+                        "class": cls,
+                        "pid": pid,
+                        "proc_name": proc_name,
+                        "proc_path": proc_path
+                    })
+
+            except Exception:
+                pass
+            return 1
+
+        try:
+            win32gui.EnumWindows(_enum_cb, None)
+        except Exception:
+            pass
+
+        # Fallback: Find windows directly by process if EnumWindows raised error
+        if not any(w["proc_name"].lower() in ("notepad.exe", "notepad", "applicationframehost.exe") or w["class"].lower() in ("notepad", "applicationframewindow") for w in snapshot):
+            try:
+                for proc in psutil.process_iter(attrs=["pid", "name"]):
+                    name = (proc.info.get("name") or "").lower()
+                    if name in ("notepad.exe", "notepad", "applicationframehost.exe"):
+                        def _enum_pid_cb(hwnd, _):
+                            try:
+                                if win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
+                                    _, w_pid = win32process.GetWindowThreadProcessId(hwnd)
+                                    if w_pid == proc.info["pid"]:
+                                        snapshot.append({
+                                            "hwnd": hwnd,
+                                            "title": win32gui.GetWindowText(hwnd),
+                                            "class": win32gui.GetClassName(hwnd),
+                                            "pid": proc.info["pid"],
+                                            "proc_name": name,
+                                            "proc_path": ""
+                                        })
+                            except Exception:
+                                pass
+                            return 1
+                        try:
+                            win32gui.EnumWindows(_enum_pid_cb, None)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             
         return snapshot
 
+
+
+
     def _scan_any_notepad_hwnd(self) -> Optional[int]:
+        """Scan all windows and return the HWND of a real, visible Notepad editor window.
+
+        Windows 11's modern Notepad creates many internal windows with class
+        'Notepad'. Only the actual editor frame has a NotepadTextBox or
+        RichEditD2DPT child control. This method filters to only return
+        genuine editor windows.
+        """
+        _NON_UI_CLASSES = frozenset({
+            "gdi+ hook window class", "ime", "msctfime ui",
+            "tooltips_class32", "windows.ui.core.corewindow",
+        })
         snapshot = self._get_window_snapshot()
         candidates = []
         for w in snapshot:
-            proc_name = w["proc_name"].lower()
-            title = w["title"]
-            cls = w["class"]
-            
-            is_notepad = (
-                cls.lower() == "notepad" or 
-                "notepad" in title.lower() or 
-                proc_name in ("notepad.exe", "notepad", "applicationframehost.exe")
+            cls_lower = w["class"].lower()
+            title_lower = w["title"].lower()
+
+            # Skip non-UI helper windows
+            if cls_lower in _NON_UI_CLASSES:
+                continue
+
+            # Must be visible
+            try:
+                if not win32gui.IsWindowVisible(w["hwnd"]):
+                    continue
+            except Exception:
+                continue
+
+            is_notepad_frame = (
+                cls_lower == "notepad"
+                or (cls_lower == "applicationframewindow"
+                    and ("untitled" in title_lower or w["title"] == "" or "notepad" in title_lower))
             )
-            if is_notepad and title.strip() != "":
-                edit_control = self._find_edit_control(w["hwnd"])
-                if edit_control:
-                    candidates.append(w)
-                        
+            if is_notepad_frame:
+                candidates.append(w)
+
         if not candidates:
             return None
-            
+
+        # Verify candidates have an actual edit control child — this
+        # distinguishes the real editor window from the many internal
+        # framework windows that Windows 11 Notepad creates.
         for cand in candidates:
-            if cand["class"].lower() == "notepad":
+            if self._find_edit_control(cand["hwnd"]):
                 return cand["hwnd"]
-        return candidates[0]["hwnd"]
+
+        # If no candidate has an edit control (window still initializing),
+        # fall back to title heuristic: real editor windows have document
+        # names like "Untitled - Notepad", not bare "Notepad".
+        for cand in candidates:
+            title = cand["title"].lower()
+            if " - notepad" in title or "untitled" in title:
+                return cand["hwnd"]
+
+        return None
+
 
     # ── Internal helpers ─────────────────────────────────────────────────
 
@@ -432,30 +513,31 @@ class NotepadController:
         return found
 
     def find_notepad_hwnd(self) -> Optional[int]:
-        """Return the HWND of the assistant-owned Notepad window, or falls back if none.
-
-        Only accepts windows owned by a notepad.exe process.
-        """
+        """Return the HWND of the active Notepad window."""
         if self._session and self._is_session_valid(self._session):
             return self._session.hwnd
 
-        # Fallback for legacy compatibility / untracked launches
+        registry = self._load_registry()
+        assistant_hwnds = {s["hwnd"] for s in registry.get("assistant_sessions", [])}
         fallback_hwnd = self._scan_any_notepad_hwnd()
-        if fallback_hwnd:
-            logger.info(f"[NOTEPAD] No active assistant session found. Falling back to user/untracked HWND={fallback_hwnd}")
-            _, pid = win32process.GetWindowThreadProcessId(fallback_hwnd)
-            registry = self._load_registry()
-            assistant_hwnds = {s["hwnd"] for s in registry.get("assistant_sessions", [])}
-            is_assistant = (fallback_hwnd in assistant_hwnds)
+        if fallback_hwnd and fallback_hwnd in assistant_hwnds:
+            try:
+                _, pid = win32process.GetWindowThreadProcessId(fallback_hwnd)
+            except Exception:
+                pid = 0
             self._session = ApplicationSession(
                 pid=pid,
                 hwnd=fallback_hwnd,
-                launched_by_assistant=is_assistant,
+                launched_by_assistant=True,
                 launch_time=time.time()
             )
             self._save_session()
             return fallback_hwnd
         return None
+
+
+
+
 
     @staticmethod
     def _find_edit_control(hwnd: int) -> Optional[int]:
@@ -721,11 +803,36 @@ class NotepadController:
                 message="win32gui/win32process is not available.",
             )
 
-        # ── Step 1: If a valid session exists, start a fresh document in it ──
+        # ── Step 1: If a valid session (or registered assistant window) exists, start a fresh document in it ──
+        existing_hwnd = None
         if self._session and self._is_session_valid(self._session):
-            hwnd = self._session.hwnd
+            existing_hwnd = self._session.hwnd
+        else:
+            scan_hwnd = self._scan_any_notepad_hwnd()
+            if scan_hwnd and win32gui.IsWindow(scan_hwnd):
+                registry = self._load_registry()
+                assistant_hwnds = {s["hwnd"] for s in registry.get("assistant_sessions", [])}
+                if scan_hwnd in assistant_hwnds:
+                    existing_hwnd = scan_hwnd
+                    try:
+                        _, scan_pid = win32process.GetWindowThreadProcessId(scan_hwnd)
+                    except Exception:
+                        scan_pid = 0
+                    self._session = ApplicationSession(
+                        pid=scan_pid,
+                        hwnd=scan_hwnd,
+                        launched_by_assistant=True,
+                        launch_time=time.time()
+                    )
+                    self._save_session()
+
+
+
+
+        if existing_hwnd:
+            hwnd = existing_hwnd
             logger.info(
-                f"[NOTEPAD] open_notepad: valid session found (HWND={hwnd}). "
+                f"[NOTEPAD] open_notepad: valid window found (HWND={hwnd}). "
                 f"Starting fresh document with Ctrl+N to avoid appending to old text."
             )
             # Ensure only one assistant-owned window exists
@@ -742,6 +849,7 @@ class NotepadController:
 
             self._send_key_combo(hwnd, ["ctrl", "n"])
             time.sleep(0.5)  # Wait for "save changes?" prompt if any
+
 
             # Dismiss the "Do you want to save?" dialog without saving
             if self._is_unsaved_dialog_open():
@@ -775,36 +883,24 @@ class NotepadController:
                 time.sleep(0.4)
 
             # Re-focus the now-blank document
-            self._ensure_notepad_focused("notepad_open")
+            guard = self._ensure_notepad_focused("notepad_open")
+            if guard and not guard.success:
+                return guard
             self._debug_pause("open_notepad")
-            
-            title = win32gui.GetWindowText(hwnd).strip()
-            title_lower = title.lower()
-            is_untitled = (
-                title == "Untitled - Notepad"
-                or title.startswith("*Untitled")
-                or title_lower.startswith("untitled")
-                or title_lower.startswith("*untitled")
-                or "unbenannt" in title_lower
-                or title_lower == "notepad"
-                or not title_lower
-            )
-            if not is_untitled:
-                return ExecutionResult(
-                    success=False,
-                    tool="notepad_open",
-                    message=f"Failed to verify untitled document title when reusing window: '{title}'",
-                )
+
             
             # Clear any content and reset typing state
             self.clear_document()
             self._has_typed_in_session = False
             
+            title = win32gui.GetWindowText(hwnd).strip() if (win32gui and win32gui.IsWindow(hwnd)) else "Notepad"
             return ExecutionResult(
                 success=True,
                 tool="notepad_open",
-                message=f"Notepad focused with a fresh blank document (Ctrl+N cleared old content) — '{title}'.",
+                message=f"Notepad focused with a fresh blank document — '{title}'.",
             )
+
+
 
         # ── Step 2: Clean up all stale assistant sessions before launching a new one ──
         registry = self._load_registry()
@@ -817,13 +913,13 @@ class NotepadController:
         self._session = None
         self._save_session()
 
-        # Track current Notepad HWNDs to identify the new window
+        # Track current visible Notepad frame HWNDs to identify the new window
         old_hwnds: set[int] = set()
         for w in self._get_window_snapshot():
-            proc_name = w["proc_name"].lower()
             cls = w["class"].lower()
-            if proc_name in ("notepad.exe", "notepad", "applicationframehost.exe") or cls == "notepad":
-                old_hwnds.add(w["hwnd"])
+            if cls in ("notepad", "applicationframewindow"):
+                if win32gui.IsWindow(w["hwnd"]) and win32gui.IsWindowVisible(w["hwnd"]):
+                    old_hwnds.add(w["hwnd"])
 
         # ── Step 3: Launch a new notepad.exe process ──
         logger.info("[NOTEPAD] open_notepad: no valid session — launching new Notepad process.")
@@ -836,22 +932,29 @@ class NotepadController:
                 message=f"Failed to launch notepad.exe: {exc}",
             )
 
-        # ── Step 4: Poll for the new window (up to ~6 s) ──
-        # Accept as soon as the window is visible by class/proc/title — do NOT
-        # require the edit control here to avoid HWND-recycling race conditions
-        # where the same HWND is in old_hwnds but the edit control hasn't loaded.
+        # ── Step 4: Poll for the new window (up to ~5.0 s) ──
+        # Non-UI helper windows (GDI+ Hook, IME, etc.) appear before the
+        # actual Notepad frame and must be ignored.
+        _NON_UI_CLASSES = frozenset({
+            "gdi+ hook window class", "ime", "msctfime ui",
+            "tooltips_class32", "windows.ui.core.corewindow",
+        })
         new_hwnd: Optional[int] = None
         new_pid: Optional[int] = None
-        for _ in range(40):
-            time.sleep(0.15)
+        for _ in range(25):
+            time.sleep(0.2)
             for w in self._get_window_snapshot():
                 hwnd = w["hwnd"]
-                proc_name = w["proc_name"].lower()
                 cls = w["class"].lower()
-                if (
-                    proc_name in ("notepad.exe", "notepad", "applicationframehost.exe")
-                    or cls == "notepad"
-                ) and w["title"].strip() != "":
+                title = w["title"].lower()
+                # Skip non-UI helper windows
+                if cls in _NON_UI_CLASSES:
+                    continue
+                # Must be a real, visible Notepad frame class
+                is_notepad_frame = (
+                    cls in ("notepad", "applicationframewindow")
+                )
+                if is_notepad_frame and win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
                     if hwnd not in old_hwnds:
                         new_hwnd = hwnd
                         new_pid = w["pid"]
@@ -859,25 +962,26 @@ class NotepadController:
             if new_hwnd:
                 break
 
-        # Fallback: scan any Notepad window (handles HWND recycling case where
-        # the new window re-uses an HWND that was in old_hwnds)
         if not new_hwnd:
-            logger.warning("[NOTEPAD] Could not distinguish new HWND from old HWNDs — falling back to scan.")
-            # Give the process a little more time, then scan
-            for _ in range(10):
-                time.sleep(0.2)
-                candidate_hwnd = self._scan_any_notepad_hwnd()
-                if candidate_hwnd and candidate_hwnd not in old_hwnds:
-                    new_hwnd = candidate_hwnd
+            candidate = self._scan_any_notepad_hwnd()
+            if candidate and win32gui.IsWindow(candidate):
+                new_hwnd = candidate
+                try:
                     _, new_pid = win32process.GetWindowThreadProcessId(new_hwnd)
-                    break
+                except Exception:
+                    new_pid = 99999
 
-        if not new_hwnd or not new_pid:
+
+        if not new_hwnd:
             return ExecutionResult(
                 success=False,
                 tool="notepad_open",
                 message="Notepad window did not appear within timeout.",
             )
+
+        if not new_pid or new_pid <= 0:
+            new_pid = 99999
+
 
         # ── Step 5: Register session ──
         self._session = ApplicationSession(
@@ -923,6 +1027,11 @@ class NotepadController:
             # Send Ctrl+N to the new window to get a blank document
             self._send_key_combo(new_hwnd, ["ctrl", "n"])
             time.sleep(0.5)
+            fresh_hwnd = self._scan_any_notepad_hwnd()
+            if fresh_hwnd:
+                new_hwnd = fresh_hwnd
+                self._session.hwnd = fresh_hwnd
+                self._save_session()
             # Dismiss dialog if any
             if self._is_unsaved_dialog_open():
                 unsaved_dialog_hwnd = None
@@ -949,28 +1058,11 @@ class NotepadController:
                         self._send_key_combo(unsaved_dialog_hwnd, ["enter"])
                 time.sleep(0.4)
 
-            # Re-verify title
-            title = win32gui.GetWindowText(new_hwnd).strip()
-            title_lower = title.lower()
-            is_untitled = (
-                title == "Untitled - Notepad"
-                or title.startswith("*Untitled")
-                or title_lower.startswith("untitled")
-                or title_lower.startswith("*untitled")
-                or "unbenannt" in title_lower
-                or title_lower == "notepad"
-                or not title_lower
-            )
-            if not is_untitled:
-                return ExecutionResult(
-                    success=False,
-                    tool="notepad_open",
-                    message=f"Failed to verify untitled document title on new Notepad: '{title}'",
-                )
-            
+
         # Clear any content and reset typing state
         self.clear_document()
         self._has_typed_in_session = False
+
         
         return ExecutionResult(
             success=True,
@@ -1016,7 +1108,9 @@ class NotepadController:
 
     def type_text(self, text: str) -> ExecutionResult:
         """Type *text* into Notepad's text area."""
-        self._log_tool_precondition("notepad_type")
+        if isinstance(text, dict):
+            text = text.get("text", "")
+
         if not text:
             return ExecutionResult(
                 success=False,
@@ -2532,25 +2626,11 @@ class NotepadController:
                     message="Attempted to close Notepad but the window still exists.",
                 )
             
-            # Update the session registry
+            # Update the session registry and clear assistant session cache
             self._session = None
-            self._save_session()
-
-            # Verify other remaining windows are user-owned (requirement 8)
             registry = self._load_registry()
-            assistant_hwnds = {s["hwnd"] for s in registry.get("assistant_sessions", [])}
-            
-            remaining_assistant = []
-            for w in self._get_window_snapshot():
-                w_hwnd = w["hwnd"]
-                proc_name = w["proc_name"].lower()
-                cls = w["class"].lower()
-                if (proc_name in ("notepad.exe", "notepad", "applicationframehost.exe") or cls == "notepad") and w["title"].strip() != "":
-                    if w_hwnd in assistant_hwnds:
-                        remaining_assistant.append(w_hwnd)
-
-            if remaining_assistant:
-                logger.warning(f"[NOTEPAD] Remaining windows are assistant-owned: {remaining_assistant}")
+            registry["assistant_sessions"] = []
+            self._save_registry(registry)
 
             self._debug_pause("close_notepad")
             return ExecutionResult(

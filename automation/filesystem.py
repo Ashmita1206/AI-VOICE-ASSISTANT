@@ -12,8 +12,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import config
+from config import get_logger
 from execution.registry import register_tool
 from execution.schemas import ExecutionResult, ExecutionTimer
+
+logger = get_logger(__name__)
 
 def _resolve_safe_path(path_str: str) -> Path:
     """Resolve a path and ensure it's absolute."""

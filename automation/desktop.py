@@ -12,10 +12,13 @@ import logging
 import re
 import types
 from typing import Any, Optional, Dict, Tuple
+
+import config
+from config import get_logger
 from execution.schemas import ExecutionResult
 from execution.registry import register_tool
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 try:
     import pyautogui
@@ -38,7 +41,7 @@ except ImportError:
 
 # Fail-safe settings for safety
 if pyautogui:
-    pyautogui.FAILSAFE = True
+    pyautogui.FAILSAFE = config.PYAUTOGUI_FAILSAFE
 
 # ── Dynamic Relative Coordinate Maps ──────────────────────────────────
 # Computes relative coordinates based on the window boundary (left, top, right, bottom)

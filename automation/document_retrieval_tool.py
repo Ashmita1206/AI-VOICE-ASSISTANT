@@ -11,13 +11,15 @@ import os
 import re
 from typing import Any, Optional
 
+import config
+from config import get_logger
 from execution.registry import register_tool
 from execution.schemas import ExecutionResult
 from agentic.memory.session_state import get_session
 from agentic.document_retrieval.manager import DocumentRetrievalManager
 from agentic.file_context_search.preview import format_results_for_voice, format_results_for_display
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 WORD_TO_NUM = {
     "1": 1, "one": 1, "first": 1, "1st": 1,
@@ -28,7 +30,7 @@ WORD_TO_NUM = {
 }
 
 def parse_result_number(val: Any) -> Optional[int]:
-    """Parse raw argument into a 1-based result index (1..5)."""
+    """Parse raw argument into a 1-based result index."""
     if val is None:
         return None
     val_str = str(val).strip().lower()
@@ -36,16 +38,25 @@ def parse_result_number(val: Any) -> Optional[int]:
         return None
     if val_str in WORD_TO_NUM:
         return WORD_TO_NUM[val_str]
-    match = re.search(r"\b(one|first|1st|two|second|2nd|three|third|3rd|four|fourth|4th|five|fifth|5th|[1-5])\b", val_str)
+    match = re.search(r"\b(one|first|1st|two|second|2nd|three|third|3rd|four|fourth|4th|five|fifth|5th|\d+)\b", val_str)
     if match:
-        return WORD_TO_NUM.get(match.group(1))
+        matched_str = match.group(1)
+        if matched_str in WORD_TO_NUM:
+            return WORD_TO_NUM[matched_str]
+        try:
+            num = int(matched_str)
+            if num > 0:
+                return num
+        except ValueError:
+            pass
     try:
         num = int(val_str)
-        if 1 <= num <= 10:
+        if num > 0:
             return num
     except (ValueError, TypeError):
         pass
     return None
+
 
 
 @register_tool("find_document_by_context")

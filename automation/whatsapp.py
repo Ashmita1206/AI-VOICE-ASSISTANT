@@ -10,10 +10,13 @@ import os
 import time
 import logging
 from typing import Any
+
+import config
+from config import get_logger
 from execution.schemas import ExecutionResult
 from execution.registry import register_tool
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Note: WhatsApp automation tools require Playwright.
 # User must run: pip install playwright && playwright install chromium
@@ -100,7 +103,7 @@ def open_whatsapp(args: dict[str, Any]) -> ExecutionResult:
             
         # Fallback to opening a new tab
         import webbrowser
-        webbrowser.open("https://web.whatsapp.com")
+        webbrowser.open(config.WHATSAPP_URL)
         return ExecutionResult(
             success=True,
             tool="open_whatsapp",
@@ -110,7 +113,7 @@ def open_whatsapp(args: dict[str, Any]) -> ExecutionResult:
         logger.warning(f"Failed to reuse WhatsApp tab: {e}. Opening new window/tab.")
         try:
             import webbrowser
-            webbrowser.open("https://web.whatsapp.com")
+            webbrowser.open(config.WHATSAPP_URL)
             return ExecutionResult(
                 success=True,
                 tool="open_whatsapp",
@@ -130,7 +133,7 @@ def send_whatsapp_message(args: dict[str, Any]) -> ExecutionResult:
         
     try:
         sync_playwright = _ensure_playwright()
-        user_data_dir = os.path.expanduser("~/.whatsapp_automation_profile")
+        user_data_dir = config.WHATSAPP_USER_DATA_DIR
         
         with sync_playwright() as p:
             # Launch persistent context to save login session
@@ -141,12 +144,12 @@ def send_whatsapp_message(args: dict[str, Any]) -> ExecutionResult:
             )
             
             page = browser.pages[0] if browser.pages else browser.new_page()
-            page.goto("https://web.whatsapp.com")
+            page.goto(config.WHATSAPP_URL)
             
             # Wait for the search box to appear (indicates user is logged in)
             logger.info("Waiting for WhatsApp to load (scan QR if first time)...")
             try:
-                search_box = page.wait_for_selector('div[contenteditable="true"][data-tab="3"]', timeout=60000)
+                search_box = page.wait_for_selector('div[contenteditable="true"][data-tab="3"]', timeout=config.WHATSAPP_LOGIN_TIMEOUT)
             except Exception:
                 browser.close()
                 return ExecutionResult(
@@ -162,7 +165,7 @@ def send_whatsapp_message(args: dict[str, Any]) -> ExecutionResult:
             # Click the first matching contact in the chat list
             try:
                 # Select the title attribute that matches the contact name
-                page.click(f'span[title="{contact}"]', timeout=5000)
+                page.click(f'span[title="{contact}"]', timeout=config.WHATSAPP_ELEMENT_TIMEOUT)
             except Exception:
                 browser.close()
                 return ExecutionResult(
@@ -175,7 +178,7 @@ def send_whatsapp_message(args: dict[str, Any]) -> ExecutionResult:
             
             # Find the message input box and type message
             try:
-                message_box = page.wait_for_selector('div[contenteditable="true"][data-tab="10"]', timeout=5000)
+                message_box = page.wait_for_selector('div[contenteditable="true"][data-tab="10"]', timeout=config.WHATSAPP_ELEMENT_TIMEOUT)
                 message_box.fill(message)
                 page.wait_for_timeout(500)
                 # Press Enter to send

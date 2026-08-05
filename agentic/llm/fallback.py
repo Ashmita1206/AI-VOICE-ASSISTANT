@@ -16,11 +16,87 @@ def apply_heuristic_fallback(transcription: str) -> PlannerOutput:
     from agentic.memory.session_state import get_session
     session = get_session()
     
-    # Rule 0: File Explorer Context Search
+    # Rule 0.1: Explicit App Launching (prefer desktop applications over web bookmarks)
+    if text in ("open calculator", "calculator", "launch calculator", "start calculator", "calc"):
+        return PlannerOutput(
+            intent="launch_application",
+            confidence=0.95,
+            reasoning="Matched Calculator application launch.",
+            steps=[PlannerStep(tool="launch_application", args={"application": "Calculator"})]
+        )
+
+    if text in ("open file explorer", "file explorer", "launch file explorer", "open explorer", "explorer"):
+        return PlannerOutput(
+            intent="launch_application",
+            confidence=0.95,
+            reasoning="Matched File Explorer application launch.",
+            steps=[PlannerStep(tool="launch_application", args={"application": "File Explorer"})]
+        )
+
+    if text in ("open chrome", "chrome", "launch chrome", "google chrome"):
+        return PlannerOutput(
+            intent="launch_application",
+            confidence=0.95,
+            reasoning="Matched Google Chrome application launch.",
+            steps=[PlannerStep(tool="launch_application", args={"application": "Chrome"})]
+        )
+
+    if text in ("open telegram", "telegram", "launch telegram", "start telegram", "check telegram", "telegram open"):
+        return PlannerOutput(
+            intent="open_telegram",
+            confidence=0.95,
+            reasoning="Matched Telegram application pipeline tool.",
+            steps=[PlannerStep(tool="open_telegram", args={})]
+        )
+
+    if text in ("open gmail", "gmail", "check gmail", "check my gmail", "open my gmail", "launch gmail", "gmail open", "open my mail"):
+        return PlannerOutput(
+            intent="open_gmail",
+            confidence=0.95,
+            reasoning="Matched Gmail application pipeline tool.",
+            steps=[PlannerStep(tool="open_gmail", args={})]
+        )
+
+    if text in ("open spotify", "spotify", "launch spotify", "start spotify", "check spotify", "spotify open"):
+        return PlannerOutput(
+            intent="open_spotify",
+            confidence=0.95,
+            reasoning="Matched Spotify application pipeline tool.",
+            steps=[PlannerStep(tool="open_spotify", args={})]
+        )
+
+    # Rule 0.2: Browser Web Search (Evaluated before local document search)
+    if "open" in text and "browser" in text and "search" in text:
+        query_match = re.search(r"search\s+(.*)", text)
+        query = query_match.group(1).strip() if query_match else ""
+        query = re.sub(r"[.!?]+$", "", query).strip()
+        return PlannerOutput(
+            intent="search_web",
+            confidence=0.8,
+            reasoning="Matched browser search.",
+            steps=[
+                PlannerStep(tool="launch_application", args={"application": "chrome"}, wait_for="ui_ready", timeout=60),
+                PlannerStep(tool="search_inside_application", args={"query": query})
+            ]
+        )
+
+    if (text.startswith("search ") or text.startswith("google ") or text.startswith("find information about ") or text.startswith("look up ")) and not re.search(r"\b(my pdf|my document|my file|python file|notebooks|requirements\.txt|whatsapp|on whatsapp)\b", text, re.IGNORECASE):
+
+        query_text = text
+        query_text = re.sub(r"^(?:search\s+google\s+for|search\s+for|search\s+web\s+for|search|google|find\s+information\s+about|look\s+up)\s+", "", query_text, flags=re.IGNORECASE)
+        query_text = re.sub(r"[.!?]+$", "", query_text).strip() or text
+        return PlannerOutput(
+            intent="search_web",
+            confidence=0.95,
+            reasoning=f"Matched browser search query: '{query_text}'",
+            steps=[PlannerStep(tool="search_web", args={"query": query_text})]
+        )
+
+    # Rule 0.3: File Explorer Context Search
     find_verbs = r"(find|search|locate|look\s+for|open|where\s+is|need|show\s+me)"
     doc_nouns = r"(file(?!\s*manager)|document|report|proposal|presentation|pdf|ppt|word|excel|spreadsheet|invoice|notes?(?!pad)|notebook(?!s)|deck)"
     if re.search(find_verbs, text) and re.search(doc_nouns, text):
-        negative_words = r"\b(notepad|open\s+notes|create\s+file|edit\s+txt|write|type)\b"
+        negative_words = r"\b(notepad|open\s+notes|create\s+file|edit\s+txt|write|type|file\s+explorer|explorer)\b"
         if not re.search(negative_words, text):
             query_text = text
             query_text = re.sub(rf"^(?:can\s+you\s+)?{find_verbs}\s+(?:the\s+|my\s+|a\s+)?{doc_nouns}(?:s)?\s+(?:about\s+|on\s+|for\s+)?", "", query_text)
@@ -168,20 +244,16 @@ def apply_heuristic_fallback(transcription: str) -> PlannerOutput:
             ]
         )
 
-    # Rule 6: Open browser and search
-    if "open" in text and "browser" in text and "search" in text:
-        query_match = re.search(r"search\s+(.*)", text)
-        query = query_match.group(1).strip() if query_match else ""
-        query = re.sub(r"[.!?]+$", "", query).strip()
-
+    # Rule 6: Browser Web Search
+    if re.search(r"\b(search|google|find\s+information|look\s+up)\b", text, re.IGNORECASE) and not re.search(r"\b(file|document|pdf|folder|directory|drive|local)\b", text, re.IGNORECASE):
+        query_text = text
+        query_text = re.sub(r"^(?:search\s+google\s+for|search\s+for|search\s+web\s+for|search|google|find\s+information\s+about|look\s+up)\s+", "", query_text, flags=re.IGNORECASE)
+        query_text = re.sub(r"[.!?]+$", "", query_text).strip() or text
         return PlannerOutput(
             intent="search_web",
-            confidence=0.8,
-            reasoning="Matched browser search.",
-            steps=[
-                PlannerStep(tool="launch_application", args={"application": "chrome"}, wait_for="ui_ready", timeout=60),
-                PlannerStep(tool="search_inside_application", args={"query": query})
-            ]
+            confidence=0.9,
+            reasoning=f"Matched browser search query: '{query_text}'",
+            steps=[PlannerStep(tool="search_web", args={"query": query_text})]
         )
 
     # Rule 6.5: Open selected search result

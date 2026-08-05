@@ -730,6 +730,38 @@ _TOOLS: list[ToolDefinition] = [
             "required": ["result_number"]
         }
     ),
+
+    # ── External Application Pipeline Tools ──────────────────────────
+
+    ToolDefinition(
+        name="open_telegram",
+        description="Launch Telegram desktop app or web interface securely via backend pipeline execution.",
+        parameters={
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    ),
+
+    ToolDefinition(
+        name="open_gmail",
+        description="Launch Gmail web interface securely via backend pipeline execution.",
+        parameters={
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    ),
+
+    ToolDefinition(
+        name="open_spotify",
+        description="Launch Spotify app or web player securely via backend pipeline execution.",
+        parameters={
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    ),
 ]
 
 # ══════════════════════════════════════════════════════════════════════

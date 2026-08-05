@@ -438,7 +438,10 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
         args = s.args or {}
         
         # Map tools to permissions
-        if tool in ("press_key", "type_text", "hotkey"):
+        if tool in ("open_telegram", "open_gmail", "open_spotify"):
+            permissions.append("Network Access")
+            permissions.append("System Control")
+        elif tool in ("press_key", "type_text", "hotkey"):
             permissions.append("Keyboard Control")
         elif tool in ("click", "double_click", "right_click", "scroll", "drag"):
             permissions.append("Mouse Control")
@@ -454,7 +457,14 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
             permissions.append("File System Access")
             
         # Human-friendly action descriptions
-        if tool == "launch_application":
+        if tool == "open_telegram":
+            estimated_actions.append("Open Telegram Application/Web")
+        elif tool == "open_gmail":
+            estimated_actions.append("Open Gmail Service")
+        elif tool == "open_spotify":
+            estimated_actions.append("Open Spotify Music Player")
+        elif tool == "launch_application":
+            estimated_actions.append(f"Open {args.get('application', 'application')}")
             estimated_actions.append(f"Open {args.get('application', 'application')}")
         elif tool == "search_inside_application":
             estimated_actions.append(f"Search for '{args.get('query', '')}'")

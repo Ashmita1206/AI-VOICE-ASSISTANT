@@ -10,10 +10,15 @@ import urllib.parse
 import subprocess
 import sys
 import platform
+import logging
 from typing import Any
 
+import config
+from config import get_logger
 from execution.registry import register_tool
 from execution.schemas import ExecutionResult, ExecutionTimer
+
+logger = get_logger(__name__)
 
 # Alias mapping for the `webbrowser` module
 _BROWSER_ALIASES = {

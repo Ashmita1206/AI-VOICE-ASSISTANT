@@ -1,0 +1,184 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&family=Fira+Code:wght@400;500&display=swap');
+
+:root {
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-heading: 'Outfit', 'Inter', sans-serif;
+  --font-mono: 'Fira Code', monospace;
+
+  /* ── Aesthetic Palette ── */
+  --background-main: #FFFFFF;
+  --background-secondary: #FDFBF7;
+  --surface-primary: #FFFFFF;
+  --surface-blue: #E3F2FD;
+  --surface-blue-soft: #F0F7FF;
+  --surface-yellow: #FFF9C4;
+  --surface-yellow-soft: #FFFBEA;
+  --surface-beige: #F5EFE6;
+
+  --text-primary: #243447;
+  --text-secondary: #5F6B7A;
+  --text-muted: #8993A1;
+
+  --accent-blue: #90CAF9;
+  --accent-blue-strong: #2563EB;
+  --accent-yellow: #F6D365;
+
+  --success-background: #E8F5E9;
+  --success-text: #2E7D32;
+  --error-background: #FFF1F0;
+  --error-text: #C62828;
+  --warning-background: #FFF8E1;
+  --warning-text: #9A6700;
+
+  --border-soft: #E8E3DC;
+  --border-blue: #CFE6F8;
+  --border-hover: #B4D5F5;
+  --shadow-soft: 0 4px 16px rgba(36, 52, 71, 0.05);
+  --shadow-hover: 0 8px 28px rgba(36, 52, 71, 0.09);
+
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-modal: 20px;
+  --radius-full: 9999px;
+
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--background-main);
+  background-image:
+    radial-gradient(at 5% 5%, rgba(227, 242, 253, 0.45) 0px, transparent 35%),
+    radial-gradient(at 95% 95%, rgba(245, 239, 230, 0.5) 0px, transparent 40%);
+  color: var(--text-primary);
+  min-height: 100vh;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Soft Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--background-secondary);
+}
+::-webkit-scrollbar-thumb {
+  background: #D1C9BF;
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #B8AE9F;
+}
+
+/* Layout */
+.app-container {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+.main-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Typography */
+h1, h2, h3, h4 {
+  font-family: var(--font-heading);
+  color: var(--text-primary);
+  letter-spacing: -0.015em;
+}
+
+/* Soft Aesthetic Card  —  rounded-xl */
+.glass-card {
+  background: var(--surface-primary);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  padding: 20px;
+  box-shadow: var(--shadow-soft);
+  transition: border-color var(--transition-normal), box-shadow var(--transition-normal), transform var(--transition-fast);
+}
+.glass-card:hover {
+  border-color: var(--border-blue);
+  box-shadow: var(--shadow-hover);
+}
+
+/* Status Badges */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--surface-blue-soft);
+  color: var(--accent-blue-strong);
+  border: 1px solid var(--border-blue);
+}
+
+/* Pulsing Dot */
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--accent-blue-strong);
+  box-shadow: 0 0 8px rgba(37, 99, 235, 0.4);
+  animation: pulse-ring 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse-ring {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.25); }
+}
+
+/* Spinner for Execution Loader */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* JSON Code Blocks */
+.json-pre {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  background: var(--background-secondary);
+  color: var(--text-primary);
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Fade-in Animation */
+.animate-fade-in {
+  animation: fadeIn 250ms ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .app-container {
+    padding: 16px 12px 48px;
+  }
+}

@@ -143,6 +143,57 @@ FEW_SHOT_EXAMPLES = [
     },
     {
         "role": "user",
+        "content": "Open Telegram"
+    },
+    {
+        "role": "assistant",
+        "content": """{
+  "thought": "User wants to open Telegram. I invoke the open_telegram pipeline tool.",
+  "steps": [
+    {
+      "tool": "open_telegram",
+      "args": {}
+    }
+  ],
+  "response": "Opening Telegram for you."
+}"""
+    },
+    {
+        "role": "user",
+        "content": "Check my Gmail"
+    },
+    {
+        "role": "assistant",
+        "content": """{
+  "thought": "User wants to check Gmail. I invoke the open_gmail pipeline tool.",
+  "steps": [
+    {
+      "tool": "open_gmail",
+      "args": {}
+    }
+  ],
+  "response": "Opening Gmail for you."
+}"""
+    },
+    {
+        "role": "user",
+        "content": "Open Spotify"
+    },
+    {
+        "role": "assistant",
+        "content": """{
+  "thought": "User wants to launch Spotify. I invoke the open_spotify pipeline tool.",
+  "steps": [
+    {
+      "tool": "open_spotify",
+      "args": {}
+    }
+  ],
+  "response": "Launching Spotify for you."
+}"""
+    },
+    {
+        "role": "user",
         "content": "What is the time right now?"
     },
     {

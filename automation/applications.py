@@ -11,10 +11,12 @@ import logging
 import time
 from typing import Any
 
+import config
+from config import get_logger
 from execution.registry import register_tool
 from execution.schemas import ExecutionResult, ExecutionTimer
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 import os
 import re
@@ -1349,3 +1351,94 @@ def perform_app_action(args: dict[str, Any]) -> ExecutionResult:
         tool="perform_app_action",
         message=f"Action '{action}' on app '{app}' is not supported or implemented."
     )
+
+
+@register_tool("open_telegram")
+def open_telegram(args: dict[str, Any]) -> ExecutionResult:
+    """Launch Telegram desktop app or open web.telegram.org interface."""
+    with ExecutionTimer() as timer:
+        try:
+            res = open_application({"application": "telegram"})
+            if res.success:
+                return ExecutionResult(
+                    success=True,
+                    tool="open_telegram",
+                    message=f"Telegram application launched: {res.message}",
+                    execution_time_ms=timer.elapsed_ms
+                )
+        except Exception:
+            pass
+
+        try:
+            import webbrowser
+            webbrowser.open("https://web.telegram.org")
+            return ExecutionResult(
+                success=True,
+                tool="open_telegram",
+                message="Opened Telegram Web interface.",
+                execution_time_ms=timer.elapsed_ms
+            )
+        except Exception as e:
+            return ExecutionResult(
+                success=False,
+                tool="open_telegram",
+                message=f"Failed to open Telegram: {e}",
+                execution_time_ms=timer.elapsed_ms
+            )
+
+
+@register_tool("open_gmail")
+def open_gmail(args: dict[str, Any]) -> ExecutionResult:
+    """Open Gmail web interface in default browser."""
+    with ExecutionTimer() as timer:
+        try:
+            import webbrowser
+            webbrowser.open("https://mail.google.com")
+            return ExecutionResult(
+                success=True,
+                tool="open_gmail",
+                message="Opened Gmail web client.",
+                execution_time_ms=timer.elapsed_ms
+            )
+        except Exception as e:
+            return ExecutionResult(
+                success=False,
+                tool="open_gmail",
+                message=f"Failed to open Gmail: {e}",
+                execution_time_ms=timer.elapsed_ms
+            )
+
+
+@register_tool("open_spotify")
+def open_spotify(args: dict[str, Any]) -> ExecutionResult:
+    """Launch Spotify desktop application or open web player."""
+    with ExecutionTimer() as timer:
+        try:
+            res = open_application({"application": "spotify"})
+            if res.success:
+                return ExecutionResult(
+                    success=True,
+                    tool="open_spotify",
+                    message=f"Spotify application launched: {res.message}",
+                    execution_time_ms=timer.elapsed_ms
+                )
+        except Exception:
+            pass
+
+        try:
+            import webbrowser
+            webbrowser.open("https://open.spotify.com")
+            return ExecutionResult(
+                success=True,
+                tool="open_spotify",
+                message="Opened Spotify Web Player.",
+                execution_time_ms=timer.elapsed_ms
+            )
+        except Exception as e:
+            return ExecutionResult(
+                success=False,
+                tool="open_spotify",
+                message=f"Failed to open Spotify: {e}",
+                execution_time_ms=timer.elapsed_ms
+            )
+

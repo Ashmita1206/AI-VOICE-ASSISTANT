@@ -397,7 +397,8 @@ def recover_step(
             for proc in psutil.process_iter(attrs=["name"]):
                 p_name = (proc.info.get("name") or "").lower()
                 p_clean = p_name[:-4] if p_name.endswith(".exe") else p_name
-                if app_name in p_clean or p_clean in app_name:
+                if p_clean and (app_name in p_clean or p_clean in app_name):
+
                     process_running = True
                     break
         except Exception:

@@ -134,6 +134,11 @@ class PlannerManager:
                 
                 logger.warning("Remote planning failed (attempt %d): %s", attempt, e)
                 
+                # Fast fail if endpoint returns 404 Not Found or Connection Refused (not timeout)
+                if ("404" in err_str or "connection refused" in err_str or "refused" in err_str or "not found" in err_str) and "timeout" not in err_str:
+                    logger.info("Remote LLM endpoint unavailable (%s) — fast failing to local heuristic planner.", e)
+                    break
+
                 if attempt < self.MAX_RETRIES:
                     time.sleep(backoff)
                     backoff *= 2  

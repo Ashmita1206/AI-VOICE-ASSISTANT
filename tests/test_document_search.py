@@ -478,7 +478,10 @@ class TestFindDocumentTool:
 
         assert result.success is True
         assert result.output is not None
-        parsed = json.loads(result.output)
+        if isinstance(result.data, dict) and "results" in result.data:
+            parsed = result.data["results"]
+        else:
+            parsed = json.loads(result.output)
         assert len(parsed) == 1
         assert parsed[0]["filename"] == "proposal.docx"
 
@@ -499,7 +502,7 @@ class TestFindDocumentTool:
 
 
 class TestOpenDocumentResult:
-    """Test the open_document_result tool handler."""
+    """Validate opening a previously found result by its 1-based index."""
 
     def test_no_pending_results_returns_failure(self):
         from automation.document_search_tool import open_document_result
@@ -534,10 +537,11 @@ class TestOpenDocumentResult:
 
         with patch("os.path.exists", return_value=True):
             with patch("agentic.document_retrieval.manager.DocumentRetrievalManager.open_result", return_value=True) as mock_open:
-                result = open_document_result({"result_number": 2})
+                result = open_document_result({"result_number": 2, "confirmed": True})
 
         assert result.success is True
         mock_open.assert_called_once_with("/docs/proposal.docx")
+
 
     def test_ordinal_word_mapping(self):
         """Verify that string numbers like '2' are parsed correctly."""

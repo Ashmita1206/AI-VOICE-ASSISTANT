@@ -360,7 +360,8 @@ class TestRecoverStep:
         from execution.recovery import recover_step, RecoveryResult
         from execution.step_state import ExecutionContext
 
-        plan = _make_plan(_make_step("launch_application", {"application": "spotify"}))
+        plan = _make_plan(_make_step("launch_application", {"application": "nonexistent_app_12345"}))
+
         ctx = ExecutionContext.from_plan(plan)
         record = ctx.records[0]
         record.mark_executing()

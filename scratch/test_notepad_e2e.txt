@@ -1,0 +1,2 @@
+End-to-end Notepad automation test.
+This file was created through the React frontend and Flask backend.

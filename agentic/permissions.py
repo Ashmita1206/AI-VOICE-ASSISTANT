@@ -72,6 +72,9 @@ class PermissionManager:
         "execute_shell",
         "send_whatsapp_message",
         "take_screenshot",
+        "open_telegram",
+        "open_gmail",
+        "open_spotify",
     }
 
     @classmethod
@@ -82,6 +85,8 @@ class PermissionManager:
     @classmethod
     def requires_confirmation(cls, tool_name: str, args: dict = None) -> bool:
         """Return True if the tool requires explicit confirmation."""
+        if tool_name in ("open_telegram", "open_gmail", "open_spotify"):
+            return True
         if tool_name == "perform_app_action" and args:
             app = args.get("app", "").lower()
             action = args.get("action", "").lower()
@@ -92,6 +97,15 @@ class PermissionManager:
     @classmethod
     def build_confirmation_message(cls, tool_name: str, args: dict) -> str:
         """Generate a natural language confirmation prompt for dangerous tools."""
+        if tool_name == "open_telegram":
+            return "Open Telegram? (Requires System & Network Access permission)"
+
+        if tool_name == "open_gmail":
+            return "Open Gmail? (Requires Network Access permission)"
+
+        if tool_name == "open_spotify":
+            return "Open Spotify? (Requires System & Network Access permission)"
+
         if tool_name == "open_website":
             url = args.get("url", "the website")
             return f"Open {url}?"
