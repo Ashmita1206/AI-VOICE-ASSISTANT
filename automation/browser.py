@@ -5,6 +5,7 @@ Browser Automation & Search Tools
 Provides tools for opening websites, searching the web, and launching browsers.
 """
 
+import os
 import webbrowser
 import urllib.parse
 import subprocess
@@ -84,6 +85,7 @@ def find_and_focus_browser_tab(url: str) -> bool:
         path_hint = ""
 
     try:
+        # pyrefly: ignore [missing-import]
         import uiautomation as auto
 
         try:
@@ -204,6 +206,75 @@ def _focus_window(window_control, win32gui) -> None:
         except Exception:
             pass
 
+def launch_url_in_browser(url: str, browser_name: str = "") -> tuple[bool, str]:
+    """
+    Launch a URL in the real Windows desktop browser.
+
+    On Windows, os.startfile() is used as the primary launcher because it
+    delegates the URL to the interactive user's registered browser handler.
+    """
+    if not url:
+        return False, "No URL provided."
+
+    # If the requested URL is already open, focus that tab first.
+    try:
+        if find_and_focus_browser_tab(url):
+            logger.info(f"[BROWSER_LAUNCH] Focused existing browser tab: {url}")
+            return True, f"Focused existing tab for {url}."
+    except Exception as ex:
+        logger.debug(f"[BROWSER_LAUNCH] Existing-tab detection failed: {ex}")
+
+    # ---------------------------------------------------------
+    # WINDOWS — REAL DESKTOP URL EXECUTION
+    # ---------------------------------------------------------
+    if sys.platform.startswith("win"):
+        try:
+            logger.info(
+                f"[BROWSER_LAUNCH] Opening URL with Windows os.startfile: {url}"
+            )
+
+            # This has been manually verified on this machine to actually
+            # open the URL in the user's interactive desktop browser.
+            os.startfile(url)
+
+            return True, f"Opened browser to {url}."
+
+        except OSError as ex:
+            logger.exception(
+                f"[BROWSER_LAUNCH] Windows os.startfile failed for {url}"
+            )
+            return False, f"Failed to open browser URL '{url}': {ex}"
+
+        except Exception as ex:
+            logger.exception(
+                f"[BROWSER_LAUNCH] Unexpected browser launch failure for {url}"
+            )
+            return False, f"Failed to launch browser: {ex}"
+
+    # ---------------------------------------------------------
+    # NON-WINDOWS FALLBACK
+    # ---------------------------------------------------------
+    try:
+        b_name = browser_name.lower().strip()
+
+        if b_name and b_name in _BROWSER_ALIASES:
+            try:
+                browser_inst = webbrowser.get(_BROWSER_ALIASES[b_name])
+                opened = browser_inst.open_new_tab(url)
+            except Exception:
+                opened = webbrowser.open_new_tab(url)
+        else:
+            opened = webbrowser.open_new_tab(url)
+
+        if opened is False:
+            return False, f"System browser launcher returned failure for '{url}'."
+
+        return True, f"Opened browser to {url}."
+
+    except Exception as ex:
+        logger.exception(f"[BROWSER_LAUNCH] Browser launch failed for {url}")
+        return False, f"Failed to launch browser: {ex}"
+
 @register_tool("open_browser")
 def open_browser(args: dict[str, Any]) -> ExecutionResult:
     """Launch the default web browser and open an optional URL."""
@@ -230,33 +301,16 @@ def open_browser(args: dict[str, Any]) -> ExecutionResult:
             if "." in url:
                 url = "https://" + url
             else:
-                # Treat as search query if no domain extension is present
                 return search_web({"query": url, "application": browser_name})
                 
     with ExecutionTimer() as timer:
-        try:
-            if url and find_and_focus_browser_tab(url):
-                return ExecutionResult(success=True, tool="open_browser", message=f"Focused existing tab for {url}.", execution_time_ms=timer.elapsed_ms)
-            
-            if browser_name and browser_name in _BROWSER_ALIASES:
-                webbrowser.get(_BROWSER_ALIASES[browser_name]).open_new_tab(url)
-            else:
-                webbrowser.open_new_tab(url)
-            
-            msg = f"Opened browser to {url}." if url else f"Opened browser {browser_name or 'default'}."
-            return ExecutionResult(
-                success=True,
-                tool="open_browser",
-                message=msg,
-                execution_time_ms=timer.elapsed_ms
-            )
-        except Exception as e:
-            return ExecutionResult(
-                success=False,
-                tool="open_browser",
-                message=f"Failed to open browser: {e}",
-                execution_time_ms=timer.elapsed_ms
-            )
+        ok, msg = launch_url_in_browser(url, browser_name)
+        return ExecutionResult(
+            success=ok,
+            tool="open_browser",
+            message=msg,
+            execution_time_ms=timer.elapsed_ms
+        )
 
 @register_tool("open_website")
 def open_website(args: dict[str, Any]) -> ExecutionResult:
@@ -269,29 +323,19 @@ def open_website(args: dict[str, Any]) -> ExecutionResult:
         url = "https://" + url
         
     with ExecutionTimer() as timer:
-        try:
-            if find_and_focus_browser_tab(url):
-                return ExecutionResult(success=True, tool="open_website", message=f"Focused existing tab for {url}.", execution_time_ms=timer.elapsed_ms)
-            
-            webbrowser.open(url)
-            return ExecutionResult(
-                success=True,
-                tool="open_website",
-                message=f"Opened website: {url}",
-                execution_time_ms=timer.elapsed_ms
-            )
-        except Exception as e:
-            return ExecutionResult(
-                success=False,
-                tool="open_website",
-                message=f"Failed to open website: {e}",
-                execution_time_ms=timer.elapsed_ms
-            )
+        ok, msg = launch_url_in_browser(url, "")
+        return ExecutionResult(
+            success=ok,
+            tool="open_website",
+            message=f"Opened website: {url}" if ok else msg,
+            execution_time_ms=timer.elapsed_ms
+        )
 
 @register_tool("search_web")
 def search_web(args: dict[str, Any]) -> ExecutionResult:
     """Search the internet for a specific query."""
     query = args.get("query", "")
+    browser_name = args.get("application", "") or args.get("browser", "")
     if not query:
         return ExecutionResult(
             success=False,
@@ -303,18 +347,11 @@ def search_web(args: dict[str, Any]) -> ExecutionResult:
     url = f"https://www.google.com/search?q={encoded_query}"
     
     with ExecutionTimer() as timer:
-        try:
-            webbrowser.open_new_tab(url)
-            return ExecutionResult(
-                success=True,
-                tool="search_web",
-                message=f"Searched web for: {query}",
-                execution_time_ms=timer.elapsed_ms
-            )
-        except Exception as e:
-            return ExecutionResult(
-                success=False,
-                tool="search_web",
-                message=f"Failed to perform search: {e}",
-                execution_time_ms=timer.elapsed_ms
-            )
+        ok, msg = launch_url_in_browser(url, browser_name)
+        return ExecutionResult(
+            success=ok,
+            tool="search_web",
+            message=f"Searched web for: {query}" if ok else f"Search launch failed: {msg}",
+            execution_time_ms=timer.elapsed_ms
+        )
+
