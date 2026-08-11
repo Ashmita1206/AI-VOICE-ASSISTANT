@@ -76,5 +76,30 @@ def run_tests():
             
     print("\n>>> All execution tests ran successfully.")
 
+def test_open_nonexistent_application_returns_failure():
+    executor = SystemExecutor()
+    plan = build_plan(("open_application", {"application": "nonexistent_fake_app_xyz_12345"}))
+    results = executor.execute(plan)
+    assert len(results) == 1
+    assert results[0]["success"] is False
+    assert "not installed or found" in results[0]["message"] or "failed" in results[0]["message"].lower()
+
+def test_launch_nonexistent_application_returns_failure():
+    executor = SystemExecutor()
+    plan = build_plan(("launch_application", {"application": "nonexistent_fake_app_xyz_12345"}))
+    results = executor.execute(plan)
+    assert len(results) == 1
+    assert results[0]["success"] is False
+    assert "Failed to launch application" in results[0]["message"]
+
+def test_resolve_and_open_nonexistent_returns_failure():
+    from unittest.mock import patch
+    executor = SystemExecutor()
+    plan = build_plan(("resolve_and_open", {"query": "nonexistent_fake_app_xyz_12345"}))
+    with patch("automation.browser.launch_url_in_browser", return_value=(False, "Executable not found")):
+        results = executor.execute(plan)
+        assert len(results) == 1
+        assert results[0]["success"] is False
+
 if __name__ == "__main__":
     run_tests()

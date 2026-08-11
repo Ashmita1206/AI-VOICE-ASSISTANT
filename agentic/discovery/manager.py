@@ -92,7 +92,9 @@ def discover(query: str) -> List[Resource]:
             elif q_norm in n_norm:
                 score = (len(q_norm) / len(n_norm)) * 0.90
             elif n_norm in q_norm:
-                score = (len(n_norm) / len(q_norm)) * 0.85
+                # Do NOT allow weak folder substring matches (e.g. folder 'microsoft' matching query 'microsoft store')
+                if res.type not in ("folder", "file"):
+                    score = (len(n_norm) / len(q_norm)) * 0.85
                 
             # 3. Abbreviation / initials check (e.g. "vs code" -> "visual studio code")
             if score == 0.0 and is_abbreviation(query, name):
@@ -150,7 +152,7 @@ def rank_resources(resources: List[Resource], intent: str) -> List[Tuple[Resourc
     force_type = None
     if "website" in intent_words:
         force_type = "website"
-    elif "app" in intent_words or "application" in intent_words:
+    elif "app" in intent_words or "application" in intent_words or "launch" in intent_words or "open" in intent_words:
         force_type = "application"
         
     prefs = load_user_preferences()
@@ -186,6 +188,9 @@ def rank_resources(resources: List[Resource], intent: str) -> List[Tuple[Resourc
             if res.type == force_type:
                 priority_base += 100.0
                 reason_modifier = " (Forced by intent modifier)"
+            elif force_type == "application" and res.type in ("folder", "file"):
+                priority_base -= 500.0
+                reason_modifier = " (Filesystem item excluded for application intent)"
             else:
                 priority_base -= 200.0
                 reason_modifier = " (Mismatched type due to modifier)"

@@ -198,16 +198,30 @@ def open_folder(args: dict[str, Any]) -> ExecutionResult:
                         execution_time_ms=timer.elapsed_ms
                     )
             
+            spawned_proc = None
             if hasattr(os, "startfile"):
                 os.startfile(path)
             else:
                 if sys.platform.startswith("win"):
-                    subprocess.Popen(f'explorer "{path}"', shell=True)
+                    spawned_proc = subprocess.Popen(["explorer.exe", str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 elif sys.platform == "darwin":
-                    subprocess.Popen(["open", str(path)])
+                    spawned_proc = subprocess.Popen(["open", str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 else:
-                    subprocess.Popen(["xdg-open", str(path)])
+                    spawned_proc = subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     
+            if spawned_proc is not None:
+                import time
+                time.sleep(0.2)
+                retcode = spawned_proc.poll()
+                if retcode is not None and retcode != 0:
+                    stderr_msg = spawned_proc.stderr.read().decode('utf-8', errors='ignore').strip() if spawned_proc.stderr else ""
+                    return ExecutionResult(
+                        success=False,
+                        tool="open_folder",
+                        message=f"Failed to open folder: {stderr_msg or f'exit code {retcode}'}",
+                        execution_time_ms=timer.elapsed_ms
+                    )
+
             return ExecutionResult(
                 success=True,
                 tool="open_folder",
@@ -245,16 +259,30 @@ def open_file(args: dict[str, Any]) -> ExecutionResult:
                         execution_time_ms=timer.elapsed_ms
                     )
                     
+            spawned_proc = None
             if hasattr(os, "startfile"):
                 os.startfile(path)
             else:
                 if sys.platform.startswith("win"):
-                    subprocess.Popen(f'start "" "{path}"', shell=True)
+                    spawned_proc = subprocess.Popen(["cmd.exe", "/c", "start", '""', str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 elif sys.platform == "darwin":
-                    subprocess.Popen(["open", str(path)])
+                    spawned_proc = subprocess.Popen(["open", str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 else:
-                    subprocess.Popen(["xdg-open", str(path)])
+                    spawned_proc = subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     
+            if spawned_proc is not None:
+                import time
+                time.sleep(0.2)
+                retcode = spawned_proc.poll()
+                if retcode is not None and retcode != 0:
+                    stderr_msg = spawned_proc.stderr.read().decode('utf-8', errors='ignore').strip() if spawned_proc.stderr else ""
+                    return ExecutionResult(
+                        success=False,
+                        tool="open_file",
+                        message=f"Failed to open file: {stderr_msg or f'exit code {retcode}'}",
+                        execution_time_ms=timer.elapsed_ms
+                    )
+
             return ExecutionResult(
                 success=True,
                 tool="open_file",

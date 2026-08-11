@@ -6,6 +6,7 @@ Handlers for opening desktop applications.
 """
 
 import subprocess
+import shutil
 import sys
 import logging
 import time
@@ -21,9 +22,46 @@ logger = get_logger(__name__)
 import os
 import re
 import types
+from dataclasses import dataclass, field
 
 # We reuse find_application as a final fallback
 from agentic.os_scanner import find_application
+
+
+@dataclass
+class LaunchVerification:
+    """Structured verification result for application launches.
+    
+    Attached to ExecutionResult.metadata['launch_verification'] so the
+    verifier and frontend can make informed decisions based on actual
+    verification signals rather than trusting a bare success boolean.
+    """
+    requested_app: str = ""
+    resolved_app: str = ""
+    resolution_source: str = ""   # "canonical", "start_apps", "registry", "app_paths", "running_process", "wsl"
+    launcher: str = ""            # "subprocess.Popen", "os.startfile", "explorer.exe", "cmd start"
+    pid: int | None = None
+    window_found: bool = False
+    window_title: str = ""
+    window_visible: bool = False
+    foreground: bool = False
+    status: str = ""              # "verified_open", "launched_no_window", "already_open", "failed"
+    elapsed_ms: int = 0
+    
+    def to_dict(self) -> dict:
+        return {
+            "requested_app": self.requested_app,
+            "resolved_app": self.resolved_app,
+            "resolution_source": self.resolution_source,
+            "launcher": self.launcher,
+            "pid": self.pid,
+            "window_found": self.window_found,
+            "window_title": self.window_title,
+            "window_visible": self.window_visible,
+            "foreground": self.foreground,
+            "status": self.status,
+            "elapsed_ms": self.elapsed_ms,
+        }
 
 try:
     import win32gui
@@ -32,14 +70,46 @@ except ImportError:
     win32gui = None
     win32process = None
 
+APP_LAUNCH_TIMEOUT_SECONDS = 30.0
+
+# ── Time-limited launch guard (prevents duplicate launches) ──────────────
+_LAUNCH_GUARD: dict[str, float] = {}
+_LAUNCH_GUARD_COOLDOWN = 5.0  # seconds before allowing a re-launch
+
+def _is_launch_guarded(app_key: str) -> bool:
+    """Return True if this app was launched within the cooldown period."""
+    ts = _LAUNCH_GUARD.get(app_key)
+    if ts and (time.time() - ts) < _LAUNCH_GUARD_COOLDOWN:
+        return True
+    return False
+
+def _mark_launched(app_key: str) -> None:
+    """Record that an app was just launched."""
+    _LAUNCH_GUARD[app_key] = time.time()
+    _clear_stale_guards()
+
+def _clear_stale_guards() -> None:
+    """Remove launch guard entries older than 30 seconds."""
+    now = time.time()
+    stale = [k for k, v in _LAUNCH_GUARD.items() if (now - v) > 30.0]
+    for k in stale:
+        del _LAUNCH_GUARD[k]
+
 CANONICAL_ALIASES = {
     "file explorer": ["file manager", "file explorer", "explorer", "this pc"],
     "task manager": ["task manager", "taskmgr", "system monitor"],
-    "command prompt": ["cmd", "command prompt", "terminal"],
+    "command prompt": ["cmd", "command prompt", "terminal", "cmd.exe"],
     "settings": ["settings", "windows settings"],
-    "calculator": ["calculator", "calc"],
+    "calculator": ["calculator", "calc", "ms-calculator"],
     "notepad": ["notepad", "text editor"],
-    "visual studio code": ["vs code", "vscode", "vs"],
+    "paint": ["paint", "mspaint", "paintapp", "ms-paint"],
+    "visual studio code": ["vs code", "vscode", "vs", "visual studio code"],
+    "microsoft word": ["microsoft word", "word", "winword", "word 2013", "word 2016", "word 2019", "word 365"],
+    "microsoft powerpoint": ["microsoft powerpoint", "powerpoint", "ppt", "powerpnt", "powerpoint 2013", "powerpoint 2016"],
+    "microsoft excel": ["microsoft excel", "excel", "excel 2013", "excel 2016"],
+    "microsoft store": ["microsoft store", "windows store", "store", "app store"],
+    "ubuntu": ["ubuntu", "ubuntu terminal", "ubuntu wsl", "wsl ubuntu"],
+    "wsl": ["wsl", "linux", "bash"],
     "chatgpt": ["chat gpt", "chatgpt"],
     "spotify": ["spotify"],
     "whatsapp": ["whatsapp"]
@@ -51,8 +121,170 @@ CANONICAL_EXECUTABLES = {
     "command prompt": "cmd.exe",
     "settings": "ms-settings:",
     "calculator": "calc.exe",
-    "notepad": "notepad.exe"
+    "notepad": "notepad.exe",
+    "paint": "mspaint.exe",
+    "microsoft word": "winword.exe",
+    "microsoft powerpoint": "powerpnt.exe",
+    "microsoft excel": "excel.exe",
+    "microsoft store": "ms-windows-store:",
 }
+
+def resolve_wsl_distribution(query: str) -> tuple[str | None, str | None]:
+    """Check registered WSL distributions and return (launch_cmd, distro_name)."""
+    cleaned = clean_query_for_matching(query)
+    if any(k in cleaned for k in ("ubuntu", "wsl", "debian", "kali", "linux", "bash")):
+        try:
+            res = subprocess.run(["wsl.exe", "-l", "-q"], capture_output=True, text=True, errors="ignore")
+            if res.returncode == 0 and res.stdout.strip():
+                distros = [d.strip().replace("\x00", "") for d in res.stdout.splitlines() if d.strip().replace("\x00", "")]
+                for d in distros:
+                    if d.lower() in cleaned or cleaned in d.lower():
+                        if shutil.which("wt.exe"):
+                            return f"wt.exe -p \"{d}\"", d
+                        return f"wsl.exe -d {d}", d
+                if distros and ("wsl" in cleaned or "ubuntu" in cleaned or "linux" in cleaned):
+                    default_d = distros[0]
+                    if shutil.which("wt.exe"):
+                        return f"wt.exe -p \"{default_d}\"", default_d
+                    return f"wsl.exe -d {default_d}", default_d
+        except Exception as e:
+            logger.debug(f"WSL distro check failed: {e}")
+    return None, None
+
+KNOWN_WEB_DESTINATIONS = {
+    "gmail": "https://mail.google.com",
+    "google mail": "https://mail.google.com",
+    "google": "https://www.google.com",
+    "youtube": "https://www.youtube.com",
+    "github": "https://github.com",
+    "spotify": "https://open.spotify.com",
+    "telegram": "https://web.telegram.org",
+    "whatsapp": "https://web.whatsapp.com",
+    "discord": "https://discord.com/app",
+    "chatgpt": "https://chatgpt.com",
+    "chat gpt": "https://chatgpt.com",
+    "twitter": "https://x.com",
+    "x": "https://x.com",
+    "linkedin": "https://www.linkedin.com",
+    "reddit": "https://www.reddit.com",
+    "facebook": "https://www.facebook.com",
+    "instagram": "https://www.instagram.com",
+    "netflix": "https://www.netflix.com",
+    "amazon": "https://www.amazon.com",
+    "word": "https://office.live.com/start/Word.aspx",
+    "microsoft word": "https://office.live.com/start/Word.aspx",
+    "powerpoint": "https://office.live.com/start/PowerPoint.aspx",
+    "microsoft powerpoint": "https://office.live.com/start/PowerPoint.aspx",
+    "excel": "https://office.live.com/start/Excel.aspx",
+    "microsoft excel": "https://office.live.com/start/Excel.aspx",
+}
+
+def find_windows_app_paths(query: str) -> str | None:
+    """Search PATH, Windows App Paths registry, and standard installation directories for executable matching query."""
+    cleaned = clean_query_for_matching(query)
+    canonical = resolve_canonical_app(cleaned)
+    target = canonical or cleaned
+
+    # 1. PATH lookup via shutil.which
+    candidates = [target]
+    if not target.lower().endswith(".exe"):
+        candidates.append(target + ".exe")
+    # Common executable aliases
+    target_l = target.lower()
+    if target_l in ("vs code", "vscode", "visual studio code", "vs"):
+        candidates.extend(["code.exe", "code"])
+    elif target_l in ("microsoft word", "word", "winword"):
+        candidates.extend(["winword.exe", "winword"])
+    elif target_l in ("microsoft powerpoint", "powerpoint", "ppt", "powerpnt"):
+        candidates.extend(["powerpnt.exe", "powerpnt"])
+    elif target_l in ("microsoft excel", "excel"):
+        candidates.extend(["excel.exe", "excel"])
+    elif target_l in ("chrome", "google chrome"):
+        candidates.extend(["chrome.exe", "chrome"])
+    elif target_l in ("firefox", "mozilla firefox"):
+        candidates.extend(["firefox.exe", "firefox"])
+    elif target_l in ("edge", "microsoft edge", "msedge"):
+        candidates.extend(["msedge.exe", "msedge"])
+    elif target_l in ("telegram", "telegram desktop"):
+        candidates.extend(["telegram.exe", "telegram"])
+    elif target_l in ("spotify", "spotify music"):
+        candidates.extend(["spotify.exe", "spotify"])
+    elif target_l in ("ubuntu", "wsl", "ubuntu terminal"):
+        candidates.extend(["wsl.exe", "wt.exe"])
+
+    for cand in candidates:
+        found = shutil.which(cand)
+        if found and os.path.exists(found):
+            return found
+
+    # 2. Windows App Paths Registry
+    if sys.platform.startswith("win"):
+        try:
+            import winreg
+            for hkey in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                app_paths_key = r"Software\Microsoft\Windows\CurrentVersion\App Paths"
+                try:
+                    key = winreg.OpenKey(hkey, app_paths_key)
+                    num_subkeys = winreg.QueryInfoKey(key)[0]
+                    for i in range(num_subkeys):
+                        try:
+                            subkey_name = winreg.EnumKey(key, i)
+                            subkey_clean = subkey_name[:-4] if subkey_name.lower().endswith(".exe") else subkey_name
+                            if is_fuzzy_match(target, subkey_clean):
+                                subkey = winreg.OpenKey(key, subkey_name)
+                                try:
+                                    val, _ = winreg.QueryValueEx(subkey, "")
+                                    val = val.strip(' "')
+                                    if val and os.path.exists(val):
+                                        subkey.Close()
+                                        key.Close()
+                                        return val
+                                except FileNotFoundError:
+                                    pass
+                                subkey.Close()
+                        except OSError:
+                            pass
+                    key.Close()
+                except OSError:
+                    pass
+        except Exception:
+            pass
+
+    # 3. Standard Program Files and AppData directories
+    search_dirs = []
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile:
+        search_dirs.extend([
+            os.path.join(user_profile, r"AppData\Local\Programs"),
+            os.path.join(user_profile, r"AppData\Roaming"),
+            os.path.join(user_profile, r"AppData\Local"),
+        ])
+    pf = os.environ.get("ProgramFiles")
+    if pf:
+        search_dirs.append(pf)
+    pf86 = os.environ.get("ProgramFiles(x86)")
+    if pf86:
+        search_dirs.append(pf86)
+
+    for sdir in search_dirs:
+        if not os.path.exists(sdir):
+            continue
+        for cand in candidates:
+            cand_exe = cand if cand.lower().endswith(".exe") else cand + ".exe"
+            try:
+                for entry in os.scandir(sdir):
+                    if entry.is_dir():
+                        exe_path = os.path.join(entry.path, cand_exe)
+                        if os.path.exists(exe_path):
+                            return exe_path
+                        exe_path_app = os.path.join(entry.path, "Application", cand_exe)
+                        if os.path.exists(exe_path_app):
+                            return exe_path_app
+            except Exception:
+                pass
+
+    return None
+
 
 def resolve_canonical_app(query: str) -> str | None:
     """Check aliases before fuzzy matching. Return canonical application immediately."""
@@ -272,13 +504,135 @@ def bring_process_to_foreground(pid: int) -> int | None:
         return None
     return None
 
-def get_start_apps() -> list[dict[str, str]]:
-    """Retrieve Windows Start Menu apps using PowerShell Get-StartApps."""
+def find_app_path_from_registry(app_exe: str) -> str | None:
+    """Query Windows Registry App Paths (HKLM & HKCU) for full executable path."""
+    if not sys.platform.startswith("win"):
+        return None
+    if not app_exe.lower().endswith(".exe"):
+        app_exe = f"{app_exe}.exe"
+    try:
+        import winreg
+        sub_key = f"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\{app_exe}"
+        for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(root, sub_key) as key:
+                    val, _ = winreg.QueryValueEx(key, "")
+                    if val:
+                        val_clean = val.strip('"')
+                        if os.path.exists(val_clean):
+                            return val_clean
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"winreg App Paths lookup failed for {app_exe}: {e}")
+    return None
+
+
+def dispatch_os_launch(executable: str, query: str = "") -> tuple[bool, str, str, str]:
+    """
+    Robust Windows OS launcher for Win32 apps, UWP apps, URI protocols, and WSL distributions.
+    
+    Returns tuple: (launch_request_accepted, target_type, launcher_used, error_or_info)
+    
+    IMPORTANT: A True return ONLY means Windows accepted the process creation request.
+    It does NOT prove the application opened successfully. Callers MUST verify
+    the application window via wait_and_focus_app() or equivalent before claiming success.
+    """
+    if not executable:
+        return False, "unknown", "none", "No executable target specified"
+
+    target_type = "win32"
+    launcher_used = "subprocess"
+    
+    # 1. WSL Distribution
+    if executable.startswith("wsl.exe") or executable.startswith("wt.exe"):
+        target_type = "wsl"
+        try:
+            logger.info(f"[OS_LAUNCH] target='{query}' | type=wsl | launcher=subprocess.Popen | command={executable}")
+            subprocess.Popen(executable, shell=True if isinstance(executable, str) else False)
+            return True, target_type, "subprocess.Popen", "WSL terminal spawned"
+        except Exception as e:
+            return False, target_type, "subprocess.Popen", str(e)
+
+    # 2. UWP AppsFolder (shell:AppsFolder\...)
+    if executable.startswith("shell:AppsFolder\\"):
+        target_type = "uwp"
+        try:
+            logger.info(f"[OS_LAUNCH] target='{query}' | type=uwp | launcher=explorer.exe | command={executable}")
+            subprocess.Popen(["explorer.exe", executable])
+            return True, target_type, "explorer.exe", "UWP app activated via AppsFolder"
+        except Exception as e:
+            return False, target_type, "explorer.exe", str(e)
+
+    # 3. URI Protocols (ms-windows-store:, ms-calculator:, etc.)
+    if executable.startswith("ms-") or (":" in executable and not ":\\" in executable and not executable[1:3] == ":\\"):
+        target_type = "uri"
+        try:
+            logger.info(f"[OS_LAUNCH] target='{query}' | type=uri | launcher=os.startfile | uri={executable}")
+            if hasattr(os, "startfile"):
+                os.startfile(executable)
+                return True, target_type, "os.startfile", "URI protocol launched via startfile"
+            else:
+                subprocess.Popen(["cmd.exe", "/c", "start", "", executable], shell=False)
+                return True, target_type, "cmd.exe /c start", "URI protocol launched via cmd start"
+        except Exception as e:
+            return False, target_type, "startfile/cmd", str(e)
+
+    # 4. Standard Win32 Executable
+    if sys.platform.startswith("win"):
+        # If bare executable name (e.g. winword.exe), query Registry App Paths for full path
+        if not os.path.isabs(executable) and executable.lower().endswith(".exe"):
+            full_path = find_app_path_from_registry(executable)
+            if full_path:
+                executable = full_path
+
+        # Attempt 1: Direct Popen if full path exists
+        if os.path.isabs(executable) and os.path.exists(executable):
+            try:
+                logger.info(f"[OS_LAUNCH] target='{query}' | type=win32 | launcher=subprocess.Popen | path={executable}")
+                proc = subprocess.Popen([executable])
+                return True, target_type, "subprocess.Popen", f"Launched PID {proc.pid}"
+            except Exception as e:
+                logger.debug(f"[OS_LAUNCH] Popen full path failed for {executable}: {e}")
+
+        # Attempt 2: os.startfile
+        try:
+            logger.info(f"[OS_LAUNCH] target='{query}' | type=win32 | launcher=os.startfile | target={executable}")
+            os.startfile(executable)
+            return True, target_type, "os.startfile", "Launched via os.startfile"
+        except Exception as e:
+            logger.debug(f"[OS_LAUNCH] startfile failed for {executable}: {e}")
+
+        # Attempt 3: cmd.exe /c start "" executable
+        try:
+            logger.info(f"[OS_LAUNCH] target='{query}' | type=win32 | launcher=cmd /c start | target={executable}")
+            subprocess.Popen(["cmd.exe", "/c", "start", "", executable], shell=False)
+            return True, target_type, "cmd.exe /c start", "Launched via cmd.exe /c start"
+        except Exception as e:
+            return False, target_type, "cmd.exe /c start", str(e)
+    else:
+        try:
+            subprocess.Popen([executable] if isinstance(executable, str) else executable)
+            return True, target_type, "subprocess.Popen", "Launched Unix process"
+        except Exception as e:
+            return False, target_type, "subprocess.Popen", str(e)
+
+
+_START_APPS_CACHE: list[dict[str, str]] = []
+_START_APPS_CACHE_TIME: float = 0.0
+
+def get_start_apps(force_refresh: bool = False) -> list[dict[str, str]]:
+    """Retrieve Windows Start Menu apps using PowerShell Get-StartApps with in-memory caching."""
+    global _START_APPS_CACHE, _START_APPS_CACHE_TIME
+    now = time.time()
+    if _START_APPS_CACHE and not force_refresh and (now - _START_APPS_CACHE_TIME < 300.0):
+        return _START_APPS_CACHE
+
     import json
     apps = []
     try:
         res = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", "Get-StartApps | ConvertTo-Json"],
+            ["powershell", "-NoProfile", "-Command", "Get-StartApps | Sort-Object Name | ConvertTo-Json"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -299,7 +653,7 @@ def get_start_apps() -> list[dict[str, str]]:
     if not apps:
         try:
             res = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", "Get-StartApps"],
+                ["powershell", "-NoProfile", "-Command", "Get-StartApps | Sort-Object Name"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -316,8 +670,12 @@ def get_start_apps() -> list[dict[str, str]]:
                         apps.append({"name": parts[0].strip(), "appid": parts[1].strip()})
         except Exception as e:
             logger.debug(f"Get-StartApps fallback failed: {e}")
-            
-    return apps
+
+    if apps:
+        _START_APPS_CACHE = apps
+        _START_APPS_CACHE_TIME = now
+
+    return apps or _START_APPS_CACHE
 
 def find_indexed_app(query: str) -> tuple[str | None, str | None]:
     """Search registry, desktop shortcuts, start menu shortcuts for a match."""
@@ -424,26 +782,7 @@ def resolve_app_launch_strategy(query: str) -> tuple[str | None, str, str, str]:
     registry_match = None
     start_menu_match = None
     
-    # Step 1: Check running process
-    try:
-        import psutil
-        for proc in psutil.process_iter(attrs=['pid', 'name', 'exe']):
-            p_name = proc.info.get('name')
-            p_exe = proc.info.get('exe')
-            if not p_name:
-                continue
-            p_name_clean = p_name
-            if p_name_clean.lower().endswith(".exe"):
-                p_name_clean = p_name_clean[:-4]
-            if is_fuzzy_match(cleaned, p_name_clean):
-                if p_exe and os.path.exists(p_exe):
-                    running_match = p_exe
-                    process_check_log = "running"
-                    break
-    except Exception:
-        pass
-        
-    # Step 2: Get-StartApps
+    # Step 1: Query cached Get-StartApps index first (instant sub-millisecond lookup)
     start_apps = get_start_apps()
     for app in start_apps:
         if is_fuzzy_match(cleaned, app["name"]):
@@ -451,54 +790,102 @@ def resolve_app_launch_strategy(query: str) -> tuple[str | None, str, str, str]:
             start_menu_log = "found shortcut"
             break
             
-    # Step 3: Registry & Shortcuts
+    # Step 2: Registry & App Paths
     if not start_menu_match:
         name_ind, path_ind = find_indexed_app(cleaned)
         if path_ind:
             registry_match = path_ind
             registry_log = f"found {os.path.basename(path_ind)}"
-            
-    target_exe = start_menu_match or registry_match or running_match
+
+    if not start_menu_match and not registry_match:
+        app_paths_match = find_windows_app_paths(cleaned)
+        if app_paths_match:
+            registry_log = f"found App Paths {os.path.basename(app_paths_match)}"
+
+    # Step 3: Running process check (if not yet matched by registered app)
+    if not start_menu_match and not registry_match and not app_paths_match:
+        try:
+            import psutil
+            for proc in psutil.process_iter(attrs=['pid', 'name', 'exe']):
+                p_name = proc.info.get('name')
+                p_exe = proc.info.get('exe')
+                if not p_name:
+                    continue
+                p_name_clean = p_name
+                if p_name_clean.lower().endswith(".exe"):
+                    p_name_clean = p_name_clean[:-4]
+                if is_fuzzy_match(cleaned, p_name_clean):
+                    if p_exe and os.path.exists(p_exe):
+                        running_match = p_exe
+                        process_check_log = "running"
+                        break
+        except Exception:
+            pass
+
+    target_exe = start_menu_match or registry_match or app_paths_match or running_match
+
+    # Cache miss refresh step: if no match found, refresh Get-StartApps cache once to detect newly installed apps
+    if not target_exe:
+        refreshed_start_apps = get_start_apps(force_refresh=True)
+        for app in refreshed_start_apps:
+            if is_fuzzy_match(cleaned, app["name"]):
+                target_exe = f"shell:AppsFolder\\{app['appid']}"
+                start_menu_log = "found shortcut (refreshed)"
+                break
+
     return target_exe, process_check_log, registry_log, start_menu_log
 
 def is_running_in_test() -> bool:
     import sys
     return "pytest" in sys.modules or "unittest" in sys.modules
 
-def wait_and_focus_app(app_name: str, timeout: float = 15.0) -> bool:
-    """Poll every 0.5s for a visible window matching app_name, restore/focus it.
+def wait_and_focus_app(app_name: str, timeout: float = APP_LAUNCH_TIMEOUT_SECONDS) -> bool:
+    """Poll every 0.5s up to timeout for a VISIBLE WINDOW matching app_name, restore/focus it.
 
-    Returns True as soon as a matching visible window is found, whether or not
-    focus promotion succeeded (Windows foreground lock can block that).
+    Returns True ONLY when a matching visible window with a non-empty title is found.
+    A running process without a visible window is NOT considered verified.
     """
     if is_running_in_test():
-        return True
+        # Under test: use shorter timeout but still run real verification
+        timeout = min(timeout, 3.0)
     if not win32gui or not win32process:
-        return True  # fallback if win32 not available
+        logger.warning("[FOCUS] win32gui/win32process not available — cannot verify window")
+        return False  # Cannot verify = not verified
 
     start = time.perf_counter()
     cleaned = clean_query_for_matching(app_name)
     canonical_match = resolve_canonical_app(cleaned)
     search_query = canonical_match or cleaned
 
+    # Title & process aliases for startup detection
+    search_terms = {search_query.lower()}
+    if canonical_match:
+        search_terms.add(canonical_match.lower())
+    if canonical_match in CANONICAL_ALIASES:
+        for alias in CANONICAL_ALIASES[canonical_match]:
+            search_terms.add(alias.lower())
+
     attempt = 0
     while time.perf_counter() - start < timeout:
         attempt += 1
         hwnds = []
 
-        # Step A: search by window title
+        # Step A: Search by window title
         def enum_win(hwnd, extra):
             if win32gui.IsWindowVisible(hwnd):
                 title = win32gui.GetWindowText(hwnd).lower()
-                if search_query in title or (canonical_match and canonical_match in title):
-                    hwnds.append(hwnd)
+                if title:
+                    for st in search_terms:
+                        if st in title or title in st:
+                            hwnds.append(hwnd)
+                            break
             return True
         try:
             win32gui.EnumWindows(enum_win, None)
         except Exception:
             pass
 
-        # Step B: search by running process PIDs when title match fails
+        # Step B: Search by running process PIDs and UWP frames when title match fails
         if not hwnds:
             try:
                 import psutil
@@ -507,8 +894,15 @@ def wait_and_focus_app(app_name: str, timeout: float = 15.0) -> bool:
                     p_name = proc.info.get('name')
                     if p_name:
                         p_clean = p_name[:-4] if p_name.lower().endswith(".exe") else p_name
-                        if is_fuzzy_match(search_query, p_clean) or (canonical_match and is_fuzzy_match(canonical_match, p_clean)):
+                        p_clean_l = p_clean.lower()
+                        matched_proc = False
+                        for st in search_terms:
+                            if is_fuzzy_match(st, p_clean_l) or st in p_clean_l or p_clean_l in st:
+                                matched_proc = True
+                                break
+                        if matched_proc:
                             pids.append(proc.info.get('pid'))
+
                 if pids:
                     for pid in pids:
                         def enum_win_pids(hwnd, extra):
@@ -520,6 +914,12 @@ def wait_and_focus_app(app_name: str, timeout: float = 15.0) -> bool:
                                         hwnds.append(hwnd)
                             return True
                         win32gui.EnumWindows(enum_win_pids, None)
+                        if hwnds:
+                            break
+                    # Process running but no titled window yet — do NOT return True.
+                    # Continue polling until a window appears or timeout is reached.
+                    if not hwnds and pids:
+                        logger.info(f"[FOCUS] Attempt {attempt} | Process running for '{app_name}' (PID={pids[0]}) but NO visible window yet. Continuing to poll...")
             except Exception:
                 pass
 
@@ -545,12 +945,11 @@ def wait_and_focus_app(app_name: str, timeout: float = 15.0) -> bool:
                 f"focus_ok={focus_ok} | foreground before='{fg_title_before}' | "
                 f"foreground after='{fg_title_after}'"
             )
-            # Window is visible — that's the success bar. Focus is best-effort.
             return True
 
         time.sleep(0.5)
 
-    logger.warning(f"[FOCUS] Timeout: no visible window found for '{app_name}' after {timeout}s.")
+    logger.warning(f"[FOCUS] Timeout after {timeout:.1f}s waiting for '{app_name}'.")
     return False
 
 @register_tool("open_application")
@@ -664,19 +1063,17 @@ def open_application(args: dict[str, Any]) -> ExecutionResult:
 
     with ExecutionTimer() as timer:
         try:
-            # We use Popen / startfile so we don't block the Python script waiting for the app to close
-            if sys.platform.startswith("win"):
-                if executable.startswith("shell:AppsFolder\\"):
-                    subprocess.Popen(["explorer.exe", executable])
-                elif hasattr(os, "startfile"):
-                    os.startfile(executable)
-                else:
-                    subprocess.Popen(executable, shell=True)
-            else:
-                subprocess.Popen(["nohup", executable], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                
+            launched, t_type, l_used, err = dispatch_os_launch(executable, app_name)
+            if not launched:
+                return ExecutionResult(
+                    success=False,
+                    tool="open_application",
+                    message=f"Application launch failed for '{app_name}' ({executable}): {err}",
+                    execution_time_ms=timer.elapsed_ms
+                )
+
             # Wait until window exists and is foreground
-            focused = wait_and_focus_app(app_name, timeout=15.0)
+            focused = wait_and_focus_app(app_name, timeout=APP_LAUNCH_TIMEOUT_SECONDS)
             if focused:
                 return ExecutionResult(
                     success=True,
@@ -688,7 +1085,7 @@ def open_application(args: dict[str, Any]) -> ExecutionResult:
                 return ExecutionResult(
                     success=False,
                     tool="open_application",
-                    message=f"Application '{app_name}' launched but failed to become visible and active.",
+                    message=f"Application '{app_name}' launched but failed to become visible and active within 30 seconds.",
                     execution_time_ms=timer.elapsed_ms
                 )
         except Exception as e:
@@ -765,21 +1162,34 @@ def launch_application(args: dict[str, Any]) -> ExecutionResult:
     # Try default shortcut/registry resolution
     executable, _, _, _ = resolve_app_launch_strategy(app_name)
     launched = False
+    launch_err = None
     if executable:
         try:
+            spawned_proc = None
             if executable.startswith("shell:AppsFolder\\"):
-                subprocess.Popen(["explorer.exe", executable])
+                spawned_proc = subprocess.Popen(["explorer.exe", executable], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 launched = True
             elif hasattr(os, "startfile"):
                 os.startfile(executable)
                 launched = True
             else:
-                subprocess.Popen(executable, shell=True)
+                cmd_args = executable if isinstance(executable, list) else executable
+                spawned_proc = subprocess.Popen(cmd_args, shell=True if isinstance(cmd_args, str) else False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 launched = True
-        except Exception:
-            pass
 
-    if not launched:
+            if spawned_proc is not None:
+                time.sleep(0.2)
+                retcode = spawned_proc.poll()
+                if retcode is not None and retcode != 0:
+                    stderr_msg = spawned_proc.stderr.read().decode('utf-8', errors='ignore').strip() if spawned_proc.stderr else ""
+                    launch_err = stderr_msg or f"exit code {retcode}"
+                    launched = False
+        except Exception as e:
+            logger.debug(f"Direct launch execution error: {e}")
+            launch_err = str(e)
+            launched = False
+
+    if not launched and not launch_err:
         # Windows Search Fallback
         print(f"[LAUNCH] '{app_name}' not running or indexed. Triggering Windows Search fallback...")
         try:
@@ -790,7 +1200,23 @@ def launch_application(args: dict[str, Any]) -> ExecutionResult:
             time.sleep(1.0)
             pyautogui.press("enter")
             time.sleep(2.5)
-            launched = True
+            
+            # Verify if process is actually running on the OS
+            is_running = False
+            try:
+                import psutil
+                cleaned = clean_query_for_matching(app_name)
+                canonical_match = resolve_canonical_app(cleaned)
+                for proc in psutil.process_iter(attrs=['name']):
+                    p_name = proc.info.get('name')
+                    if p_name:
+                        p_clean = p_name[:-4] if p_name.lower().endswith(".exe") else p_name
+                        if is_fuzzy_match(canonical_match or cleaned, p_clean):
+                            is_running = True
+                            break
+            except Exception:
+                pass
+            launched = is_running
         except Exception as e:
             logger.debug(f"Windows Search automation failed: {e}")
 
@@ -809,54 +1235,89 @@ def launch_application(args: dict[str, Any]) -> ExecutionResult:
                 message=f"Launched application '{app_name}' but failed to focus or show its window."
             )
 
-    # Browser Fallback
-    print(f"[LAUNCH] Windows Search failed for '{app_name}'. Triggering browser fallback...")
-    try:
-        url = f"https://www.google.com/search?q={app_name}"
-        if "chatgpt" in search_query:
-            url = "https://chat.openai.com"
-        elif "whatsapp" in search_query:
-            url = "https://web.whatsapp.com"
-        # Reuse an existing matching browser tab if one is already open
-        from automation.browser import find_and_focus_browser_tab
-        if find_and_focus_browser_tab(url):
-            return ExecutionResult(
-                success=True,
-                tool="launch_application",
-                message=f"Could not launch '{app_name}' locally. Switched to existing browser tab: {url}",
-                metadata={"opened_in_browser": True, "reused_tab": True, "url": url}
-            )
-        import webbrowser
-        webbrowser.open_new_tab(url)
-        return ExecutionResult(
-            success=True,
-            tool="launch_application",
-            message=f"Could not launch '{app_name}' locally. Opened browser fallback: {url}",
-            metadata={"opened_in_browser": True, "url": url}
-        )
-    except Exception as e:
-        return ExecutionResult(
-            success=False,
-            tool="launch_application",
-            message=f"Failed to launch '{app_name}' locally or in browser: {e}"
-        )
+    return ExecutionResult(
+        success=False,
+        tool="launch_application",
+        message=f"Failed to launch application '{app_name}' locally: {launch_err or 'Application binary or window not found.'}"
+    )
 
 @register_tool("open_terminal")
 def open_terminal(args: dict[str, Any]) -> ExecutionResult:
-    """Open a new terminal window."""
+    """Open a new terminal window across OS platforms with robust process validation."""
     with ExecutionTimer() as timer:
         try:
+            last_err = None
+            spawned_proc = None
+
             if sys.platform.startswith("win"):
-                subprocess.Popen("start cmd", shell=True)
+                terminals = [
+                    ["wt.exe"],
+                    ["cmd.exe", "/c", "start", "cmd.exe"],
+                    ["powershell.exe", "-Command", "Start-Process cmd"]
+                ]
+                for term in terminals:
+                    exe_name = term[0]
+                    if shutil.which(exe_name) or exe_name in ("wt.exe", "cmd.exe", "powershell.exe"):
+                        try:
+                            spawned_proc = subprocess.Popen(term, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                            break
+                        except Exception as ex:
+                            last_err = ex
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", "-a", "Terminal"])
+                if shutil.which("open"):
+                    spawned_proc = subprocess.Popen(["open", "-a", "Terminal"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                else:
+                    last_err = "Command 'open' not found on macOS system path."
             else:
-                subprocess.Popen(["gnome-terminal"])
-                
+                linux_terminals = [
+                    "gnome-terminal",
+                    "x-terminal-emulator",
+                    "konsole",
+                    "xfce4-terminal",
+                    "tilix",
+                    "alacritty",
+                    "kitty",
+                    "xterm"
+                ]
+                found_term = None
+                for term in linux_terminals:
+                    if shutil.which(term):
+                        found_term = term
+                        break
+                if found_term:
+                    spawned_proc = subprocess.Popen([found_term], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                else:
+                    last_err = f"No supported Linux terminal emulator found (tried {', '.join(linux_terminals)})."
+
+            if spawned_proc is not None:
+                time.sleep(0.2)
+                retcode = spawned_proc.poll()
+                if retcode is not None and retcode != 0:
+                    stderr_data = ""
+                    if spawned_proc.stderr:
+                        try:
+                            stderr_data = spawned_proc.stderr.read().decode('utf-8', errors='ignore').strip()
+                        except Exception:
+                            pass
+                    err_msg = stderr_data or f"Terminal process exited immediately with return code {retcode}."
+                    return ExecutionResult(
+                        success=False,
+                        tool="open_terminal",
+                        message=f"Failed to launch terminal: {err_msg}",
+                        execution_time_ms=timer.elapsed_ms
+                    )
+
+                return ExecutionResult(
+                    success=True,
+                    tool="open_terminal",
+                    message="Opened terminal window.",
+                    execution_time_ms=timer.elapsed_ms
+                )
+
             return ExecutionResult(
-                success=True,
+                success=False,
                 tool="open_terminal",
-                message="Opened terminal window.",
+                message=f"Failed to open terminal: {last_err or 'No valid terminal binary found on OS.'}",
                 execution_time_ms=timer.elapsed_ms
             )
         except Exception as e:
@@ -872,17 +1333,48 @@ def open_file_manager(args: dict[str, Any]) -> ExecutionResult:
     """Open the file manager."""
     with ExecutionTimer() as timer:
         try:
+            spawned_proc = None
+            last_err = None
+
             if sys.platform.startswith("win"):
-                subprocess.Popen("explorer .", shell=True)
+                spawned_proc = subprocess.Popen(["explorer.exe", "."], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", "."])
+                spawned_proc = subprocess.Popen(["open", "."], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             else:
-                subprocess.Popen(["nautilus", "."])
-                
+                file_managers = ["nautilus", "xdg-open", "dolphin", "thunar", "pcmanfm", "nemo"]
+                found_fm = None
+                for fm in file_managers:
+                    if shutil.which(fm):
+                        found_fm = fm
+                        break
+                if found_fm:
+                    spawned_proc = subprocess.Popen([found_fm, "."], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                else:
+                    last_err = f"No supported Linux file manager found (tried {', '.join(file_managers)})."
+
+            if spawned_proc is not None:
+                time.sleep(0.2)
+                retcode = spawned_proc.poll()
+                if retcode is not None and retcode != 0:
+                    stderr_msg = spawned_proc.stderr.read().decode('utf-8', errors='ignore').strip() if spawned_proc.stderr else ""
+                    return ExecutionResult(
+                        success=False,
+                        tool="open_file_manager",
+                        message=f"Failed to open file manager: {stderr_msg or f'exit code {retcode}'}",
+                        execution_time_ms=timer.elapsed_ms
+                    )
+
+                return ExecutionResult(
+                    success=True,
+                    tool="open_file_manager",
+                    message="Opened file manager.",
+                    execution_time_ms=timer.elapsed_ms
+                )
+
             return ExecutionResult(
-                success=True,
+                success=False,
                 tool="open_file_manager",
-                message="Opened file manager.",
+                message=f"Failed to open file manager: {last_err or 'No file manager found'}",
                 execution_time_ms=timer.elapsed_ms
             )
         except Exception as e:
@@ -895,8 +1387,8 @@ def open_file_manager(args: dict[str, Any]) -> ExecutionResult:
 
 @register_tool("resolve_and_open")
 def resolve_and_open(args: dict[str, Any]) -> ExecutionResult:
-    """Resolve and open a desktop application, website, file or folder by fuzzy matching."""
-    query = args.get("query", "")
+    """Resolve and open a desktop application, website, file or folder by fuzzy matching with universal fallback."""
+    query = args.get("query", "").strip()
     if not query:
         return ExecutionResult(
             success=False,
@@ -907,51 +1399,105 @@ def resolve_and_open(args: dict[str, Any]) -> ExecutionResult:
     cleaned_query = clean_query_for_matching(query)
     canonical_match = resolve_canonical_app(cleaned_query)
     search_query = canonical_match or cleaned_query
+
+    # Step 0: Check if query is an explicit URL
+    if query.startswith("http://") or query.startswith("https://") or query.startswith("localhost:") or "localhost:" in query:
+        from automation.browser import open_browser
+        res = open_browser({"url": query})
+        res.tool = "resolve_and_open"
+        res.resource_type = "website"
+        res.action_type = "opened_url"
+        return res
     
-    if canonical_match and canonical_match in CANONICAL_EXECUTABLES:
-        print(f"[DISCOVERY] Canonical alias matched: {canonical_match}")
-        print("[DISCOVERY] Launching application...")
-        executable = CANONICAL_EXECUTABLES[canonical_match]
-        launched = False
-        try:
-            if sys.platform.startswith("win"):
-                if hasattr(os, "startfile"):
-                    os.startfile(executable)
-                    launched = True
-                else:
-                    subprocess.Popen(executable, shell=True)
-                    launched = True
+    # Step 0.5: Primarily Web-Based Services (Gmail, Google, YouTube, GitHub)
+    target_key = search_query.lower()
+    is_primarily_web = target_key in ("gmail", "google mail", "google", "youtube", "github")
+    if is_primarily_web:
+        known_web_url = KNOWN_WEB_DESTINATIONS.get(target_key) or KNOWN_WEB_DESTINATIONS.get(cleaned_query.lower())
+        if known_web_url:
+            from automation.browser import open_browser
+            res = open_browser({"url": known_web_url})
+            if res.success:
+                res_custom = make_custom_result(
+                    success=True,
+                    resource_type="website",
+                    reason=f"Opened {query} in your browser."
+                )
+                res_custom.action_type = "opened_web_app"
+                res_custom.fallback_used = True
+                res_custom.fallback_type = "known_web_app"
+                return res_custom
             else:
-                subprocess.Popen(["nohup", executable], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                launched = True
-        except Exception as e:
-            logger.debug(f"Failed to launch canonical app: {e}")
-            
+                res_fail = make_custom_result(
+                    success=False,
+                    resource_type="website",
+                    reason=f"I couldn't open {query} because the browser failed to launch: {res.message}"
+                )
+                res_fail.action_type = "failed"
+                return res_fail
+
+    # Step 0.8: WSL / Terminal Distributions (Ubuntu, Debian, Kali, WSL)
+    wsl_cmd, wsl_distro = resolve_wsl_distribution(search_query)
+    if wsl_cmd:
+        guarded = _is_launch_guarded(search_query)
+        launched = False
+        if not guarded:
+            launched, t_type, l_used, err = dispatch_os_launch(wsl_cmd, search_query)
+            if launched:
+                _mark_launched(search_query)
+        else:
+            launched = True  # recently launched, skip re-launch
+
         if launched:
-            focused = wait_and_focus_app(query, timeout=15.0)
+            focused = wait_and_focus_app(wsl_distro or query, timeout=APP_LAUNCH_TIMEOUT_SECONDS)
             if focused:
-                return make_custom_result(
+                res = make_custom_result(
                     success=True,
                     resource_type="application",
-                    reason="Canonical application launched"
+                    reason=f"Opened {wsl_distro or query} terminal."
                 )
+                res.action_type = "opened_wsl_terminal"
+                return res
             else:
+                logger.warning(f"[APP_LAUNCH] WSL '{wsl_distro or query}' launched but no visible window detected.")
                 return make_custom_result(
                     success=False,
                     resource_type="application",
-                    reason="Canonical application launched but failed to focus"
+                    reason=f"WSL terminal '{wsl_distro or query}' was launched but no visible window appeared within {APP_LAUNCH_TIMEOUT_SECONDS}s."
                 )
+
+    # Step 1: Check canonical application mapping & URI protocols (e.g. ms-windows-store:)
+    if canonical_match and canonical_match in CANONICAL_EXECUTABLES:
+        executable = CANONICAL_EXECUTABLES[canonical_match]
+        guarded = _is_launch_guarded(search_query)
+        launched = False
+        launch_err = None
+        if not guarded:
+            launched, t_type, l_used, launch_err = dispatch_os_launch(executable, search_query)
+            if launched:
+                _mark_launched(search_query)
         else:
-            return make_custom_result(
-                success=False,
-                resource_type="application",
-                reason="Failed to launch canonical application"
-            )
-        
-    print(f"[DISCOVERY] Query: {search_query}")
-    
-    # Step 1: Check if the application is already running using psutil.
-    # If running, bring its window to the foreground.
+            launched = True  # recently launched, skip re-launch
+
+        if launched:
+            focused = wait_and_focus_app(query, timeout=APP_LAUNCH_TIMEOUT_SECONDS)
+            if focused:
+                res = make_custom_result(
+                    success=True,
+                    resource_type="application",
+                    reason=f"Opened {query}."
+                )
+                res.action_type = "opened_uwp_app" if "store" in query.lower() else "opened_local_app"
+                return res
+            else:
+                logger.warning(f"[APP_LAUNCH] Canonical app '{query}' launched but no visible window detected.")
+                return make_custom_result(
+                    success=False,
+                    resource_type="application",
+                    reason=f"Application '{query}' was launched but no visible window appeared within {APP_LAUNCH_TIMEOUT_SECONDS}s."
+                )
+            
+    # Step 2: Check if application is currently running AND has a visible window
     running_match_pid = None
     running_match_name = None
     try:
@@ -960,170 +1506,145 @@ def resolve_and_open(args: dict[str, Any]) -> ExecutionResult:
             p_name = proc.info.get('name')
             if not p_name:
                 continue
-            p_name_clean = p_name
-            if p_name_clean.lower().endswith(".exe"):
-                p_name_clean = p_name_clean[:-4]
+            p_name_clean = p_name[:-4] if p_name.lower().endswith(".exe") else p_name
             if is_fuzzy_match(search_query, p_name_clean):
                 running_match_pid = proc.info.get('pid')
                 running_match_name = p_name
                 break
     except Exception as e:
-        logger.debug(f"Step 1 psutil check failed: {e}")
+        logger.debug(f"psutil check failed: {e}")
         
     if running_match_pid:
-        print(f"[DISCOVERY] Found running app: {running_match_name}")
-        print("[DISCOVERY] Bringing window to foreground...")
-        print("[DISCOVERY] Browser fallback skipped.")
         hwnd = bring_process_to_foreground(running_match_pid)
-        
-        from agentic.memory.session_state import get_session
-        get_session().set_context(app=cleaned_query)
-        from agentic.memory.app_context import AppContextManager
-        AppContextManager.set_context(active_app=cleaned_query, window_handle=hwnd)
-        
-        # Verify focus
-        if is_running_in_test() or (win32gui and win32gui.GetForegroundWindow() == hwnd):
+        if hwnd:
+            # A visible window was found and focused — this is a genuine "already open"
+            from agentic.memory.session_state import get_session
+            get_session().set_context(app=cleaned_query)
+            from agentic.memory.app_context import AppContextManager
+            AppContextManager.set_context(active_app=cleaned_query, window_handle=hwnd)
+            
             res = make_custom_result(
                 success=True,
                 resource_type="application",
-                reason="Application found and launched"
+                reason=f"{query} was already running and has been brought to the foreground."
             )
             res.app_running = True
             res.action = "activate_window"
+            res.action_type = "opened_local_app"
             return res
         else:
-            # Re-verify and try to wait and focus
-            focused = wait_and_focus_app(query, timeout=15.0)
-            res = make_custom_result(
-                success=focused,
-                resource_type="application",
-                reason="Application found and focused" if focused else "Application found but failed to focus"
-            )
-            res.app_running = True
-            res.action = "activate_window"
-            return res
-        
-    # Step 2: Search Windows Start Menu applications using PowerShell: Get-StartApps
-    start_apps = get_start_apps()
-    start_app_match = None
-    for app in start_apps:
-        if is_fuzzy_match(search_query, app["name"]):
-            start_app_match = app
-            break
-            
-    if start_app_match:
-        print(f"[DISCOVERY] Found StartApp: {start_app_match['name']}")
-        print("[DISCOVERY] Launching application...")
-        print("[DISCOVERY] Browser fallback skipped.")
+            # Process running but no visible window — do NOT claim "already open".
+            # Fall through to launch a new instance.
+            logger.info(f"[APP_RESOLVE] Process '{running_match_name}' (PID={running_match_pid}) running but no visible window. Will attempt fresh launch.")
+
+    # Step 3: Try resolving installed local app via resolve_app_launch_strategy / Get-StartApps / shortcuts / App Paths
+    executable, _, _, _ = resolve_app_launch_strategy(search_query)
+    if executable:
+        guarded = _is_launch_guarded(search_query)
         launched = False
-        try:
-            subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{start_app_match['appid']}"])
-            launched = True
-        except Exception as e:
-            logger.debug(f"Failed to launch StartApp via explorer: {e}")
-            
+        launch_err = None
+        if not guarded:
+            launched, t_type, l_used, launch_err = dispatch_os_launch(executable, search_query)
+            if launched:
+                _mark_launched(search_query)
+        else:
+            launched = True  # recently launched, skip re-launch
+
         if launched:
-            focused = wait_and_focus_app(query, timeout=15.0)
-            return make_custom_result(
-                success=focused,
-                resource_type="application",
-                reason="Application found and launched" if focused else "Application launched but failed to focus"
-            )
-        else:
-            return make_custom_result(
-                success=False,
-                resource_type="application",
-                reason="Failed to launch Application"
-            )
-        
-    # Step 3: Search indexed resources:
-    # - Registry uninstall entries
-    # - Start Menu shortcuts
-    # - Desktop shortcuts
-    # - shell:AppsFolder entries
-    # - installed executables
-    indexed_app_name, indexed_app_exe = find_indexed_app(search_query)
-    if indexed_app_exe:
-        print(f"[DISCOVERY] Found indexed app: {indexed_app_name}")
-        print("[DISCOVERY] Launching application...")
-        print("[DISCOVERY] Browser fallback skipped.")
-        launched = False
-        try:
-            if sys.platform.startswith("win"):
-                if hasattr(os, "startfile"):
-                    os.startfile(indexed_app_exe)
-                    launched = True
-                else:
-                    subprocess.Popen(indexed_app_exe, shell=True)
-                    launched = True
+            focused = wait_and_focus_app(query, timeout=APP_LAUNCH_TIMEOUT_SECONDS)
+            if focused:
+                res = make_custom_result(
+                    success=True,
+                    resource_type="application",
+                    reason=f"Opened {query}."
+                )
+                res.action_type = "opened_uwp_app" if "AppsFolder" in executable or "ms-" in executable else "opened_local_app"
+                return res
             else:
-                subprocess.Popen(["nohup", indexed_app_exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                launched = True
-        except Exception as e:
-            logger.debug(f"Failed to launch indexed app: {e}")
+                logger.warning(f"[APP_LAUNCH] App '{query}' (exe={executable}) launched but no visible window detected.")
+                return make_custom_result(
+                    success=False,
+                    resource_type="application",
+                    reason=f"Application '{query}' was launched but no visible window appeared within {APP_LAUNCH_TIMEOUT_SECONDS}s."
+                )
             
-        if launched:
-            focused = wait_and_focus_app(query, timeout=15.0)
-            return make_custom_result(
-                success=focused,
-                resource_type="application",
-                reason="Application found and launched" if focused else "Application launched but failed to focus"
+    # Step 4: Known Web Destinations Fallback
+    target_key = search_query.lower()
+    known_web_url = KNOWN_WEB_DESTINATIONS.get(target_key) or KNOWN_WEB_DESTINATIONS.get(cleaned_query.lower())
+    if known_web_url:
+        from automation.browser import open_browser
+        res = open_browser({"url": known_web_url})
+        if res.success:
+            # Distinguish web-only services from local apps falling back to web
+            is_primarily_web = target_key in ("gmail", "google mail", "google", "youtube", "github")
+            if is_primarily_web:
+                msg = f"Opened {query} in your browser."
+            else:
+                msg = f"{query} isn't available as a local app, so I opened {query} Web."
+            res_custom = make_custom_result(
+                success=True,
+                resource_type="website",
+                reason=msg
             )
+            res_custom.action_type = "opened_web_app"
+            res_custom.fallback_used = True
+            res_custom.fallback_type = "known_web_app"
+            return res_custom
         else:
-            return make_custom_result(
+            res_fail = make_custom_result(
                 success=False,
-                resource_type="application",
-                reason="Failed to launch Application"
+                resource_type="website",
+                reason=f"I couldn't open {query} because the browser failed to launch: {res.message}"
             )
-        
+            res_fail.action_type = "failed"
+            return res_fail
+
     # Step 5: Check browser bookmarks/history
-    # if a website exists, open it.
-    print("[DISCOVERY] No application found.")
     website_match = find_website_resource(search_query)
     if website_match:
-        print(f"[DISCOVERY] Found website match: {website_match.name}")
-        print("[DISCOVERY] Opening website...")
-        try:
-            # Reuse an existing matching browser tab if one is already open
-            from automation.browser import find_and_focus_browser_tab
-            if not find_and_focus_browser_tab(website_match.url):
-                import webbrowser
-                webbrowser.open_new_tab(website_match.url)
-        except Exception as e:
-            logger.debug(f"Failed to open website fallback: {e}")
-        return make_custom_result(
+        from automation.browser import open_browser
+        res = open_browser({"url": website_match.url})
+        if res.success:
+            res_custom = make_custom_result(
+                success=True,
+                resource_type="website",
+                reason=f"Opened {website_match.name} in your browser."
+            )
+            res_custom.action_type = "opened_web_app"
+            res_custom.fallback_used = True
+            res_custom.fallback_type = "bookmark"
+            return res_custom
+        else:
+            res_fail = make_custom_result(
+                success=False,
+                resource_type="website",
+                reason=f"I couldn't open {website_match.name} because the browser failed to launch: {res.message}"
+            )
+            res_fail.action_type = "failed"
+            return res_fail
+
+    # Step 6: Universal Browser Search Fallback
+    from automation.browser import search_web
+    res_search = search_web({"query": query})
+    if res_search.success:
+        res_custom = make_custom_result(
             success=True,
             resource_type="website",
-            reason="Website found and opened"
+            reason=f"I couldn't find an installed app or known web destination for {query}, so I searched for it in your browser."
         )
-        
-    # Step 6: Open Google Search as the final fallback.
-    print("[DISCOVERY] No website match found.")
-    print("[DISCOVERY] Opening Google Search fallback...")
-    
-    # Custom fallback URLs for chatgpt and whatsapp
-    q_clean = cleaned_query.lower().strip().replace(" ", "")
-    if "chatgpt" in q_clean:
-        url = "https://chat.openai.com"
-    elif "whatsapp" in q_clean:
-        url = "https://web.whatsapp.com"
+        res_custom.action_type = "searched_web"
+        res_custom.fallback_used = True
+        res_custom.fallback_type = "search_web"
+        return res_custom
     else:
-        url = f"https://www.google.com/search?q={cleaned_query}"
-        
-    try:
-        # Reuse an existing matching browser tab if one is already open
-        from automation.browser import find_and_focus_browser_tab
-        if not find_and_focus_browser_tab(url):
-            import webbrowser
-            webbrowser.open_new_tab(url)
-    except Exception as e:
-        logger.debug(f"Failed to open fallback URL: {e}")
-        
-    return make_custom_result(
-        success=True,
-        resource_type="website",
-        reason="Google search fallback opened"
-    )
+        res_fail = make_custom_result(
+            success=False,
+            resource_type="application",
+            reason=f"I couldn't open or search for {query} because the browser failed to launch: {res_search.message}"
+        )
+        res_fail.action_type = "failed"
+        return res_fail
+
 
 @register_tool("is_app_running")
 def is_app_running(args: dict[str, Any]) -> ExecutionResult:
@@ -1355,90 +1876,31 @@ def perform_app_action(args: dict[str, Any]) -> ExecutionResult:
 
 @register_tool("open_telegram")
 def open_telegram(args: dict[str, Any]) -> ExecutionResult:
-    """Launch Telegram desktop app or open web.telegram.org interface."""
+    """Launch Telegram desktop app or open web interface."""
     with ExecutionTimer() as timer:
-        try:
-            res = open_application({"application": "telegram"})
-            if res.success:
-                return ExecutionResult(
-                    success=True,
-                    tool="open_telegram",
-                    message=f"Telegram application launched: {res.message}",
-                    execution_time_ms=timer.elapsed_ms
-                )
-        except Exception:
-            pass
-
-        try:
-            import webbrowser
-            webbrowser.open("https://web.telegram.org")
-            return ExecutionResult(
-                success=True,
-                tool="open_telegram",
-                message="Opened Telegram Web interface.",
-                execution_time_ms=timer.elapsed_ms
-            )
-        except Exception as e:
-            return ExecutionResult(
-                success=False,
-                tool="open_telegram",
-                message=f"Failed to open Telegram: {e}",
-                execution_time_ms=timer.elapsed_ms
-            )
+        res = resolve_and_open({"query": "telegram"})
+        res.tool = "open_telegram"
+        res.execution_time_ms = timer.elapsed_ms
+        return res
 
 
 @register_tool("open_gmail")
 def open_gmail(args: dict[str, Any]) -> ExecutionResult:
     """Open Gmail web interface in default browser."""
     with ExecutionTimer() as timer:
-        try:
-            import webbrowser
-            webbrowser.open("https://mail.google.com")
-            return ExecutionResult(
-                success=True,
-                tool="open_gmail",
-                message="Opened Gmail web client.",
-                execution_time_ms=timer.elapsed_ms
-            )
-        except Exception as e:
-            return ExecutionResult(
-                success=False,
-                tool="open_gmail",
-                message=f"Failed to open Gmail: {e}",
-                execution_time_ms=timer.elapsed_ms
-            )
+        res = resolve_and_open({"query": "gmail"})
+        res.tool = "open_gmail"
+        res.execution_time_ms = timer.elapsed_ms
+        return res
 
 
 @register_tool("open_spotify")
 def open_spotify(args: dict[str, Any]) -> ExecutionResult:
     """Launch Spotify desktop application or open web player."""
     with ExecutionTimer() as timer:
-        try:
-            res = open_application({"application": "spotify"})
-            if res.success:
-                return ExecutionResult(
-                    success=True,
-                    tool="open_spotify",
-                    message=f"Spotify application launched: {res.message}",
-                    execution_time_ms=timer.elapsed_ms
-                )
-        except Exception:
-            pass
+        res = resolve_and_open({"query": "spotify"})
+        res.tool = "open_spotify"
+        res.execution_time_ms = timer.elapsed_ms
+        return res
 
-        try:
-            import webbrowser
-            webbrowser.open("https://open.spotify.com")
-            return ExecutionResult(
-                success=True,
-                tool="open_spotify",
-                message="Opened Spotify Web Player.",
-                execution_time_ms=timer.elapsed_ms
-            )
-        except Exception as e:
-            return ExecutionResult(
-                success=False,
-                tool="open_spotify",
-                message=f"Failed to open Spotify: {e}",
-                execution_time_ms=timer.elapsed_ms
-            )
 

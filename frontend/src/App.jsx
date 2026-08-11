@@ -6,6 +6,7 @@ import { FSMStateBadge } from './components/desktop/FSMStateBadge';
 import { ConfirmationCard } from './components/desktop/ConfirmationCard';
 import { CompletionPopup } from './components/desktop/CompletionPopup';
 import { LiveExecutionVisualizer } from './components/desktop/LiveExecutionVisualizer';
+import { TextInput } from './components/desktop/TextInput';
 import { FileSearchModal } from './components/search/FileSearchModal';
 import { DocumentConfirmModal } from './components/search/DocumentConfirmModal';
 import { QuickShortcuts } from './components/notepad/QuickShortcuts';
@@ -166,13 +167,17 @@ export default function App() {
             )}
 
             {/* ── Pure Voice Assistant Recorder Zone ── */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', margin: '12px 0 16px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', margin: '12px 0 16px', width: '100%' }}>
               <MicRecorder
                 isRecording={isRecording}
                 micStatusText={micStatusText}
                 recordingDuration={recordingDuration}
                 onStart={handleMicStart}
                 onStop={stopRecording}
+              />
+              <TextInput
+                onSubmitText={handleQuickCommand}
+                isProcessing={isProcessing || isRecording}
               />
             </div>
 

@@ -85,16 +85,54 @@ def is_uwp_window_for_pid(hwnd: int, target_pid: int) -> bool:
     return False
 
 def _is_process_running(name: str) -> bool:
-    """Return True if any process name contains *name* (case-insensitive)."""
+    """Return True if any process name matches *name* using exact or canonical match.
+    
+    Uses normalized exact match and canonical alias lookup to prevent
+    false positives (e.g. 'store' must NOT match 'restore').
+    """
     psutil = _try_psutil()
     if psutil is None:
-        return True  # can't verify — assume ok
+        return False  # can't verify — NOT verified
     name = name.lower().strip()
+    
+    # Build set of valid process name stems for this app
+    valid_stems = {name}
+    # Add canonical process name aliases
+    _PROCESS_ALIASES = {
+        "calculator": {"calculatorapp", "calculator", "calc"},
+        "notepad": {"notepad"},
+        "file explorer": {"explorer"},
+        "settings": {"systemsettings", "systemsettingsadminflows"},
+        "task manager": {"taskmgr"},
+        "command prompt": {"cmd", "conhost"},
+        "powershell": {"powershell", "pwsh"},
+        "microsoft word": {"winword", "word"},
+        "word": {"winword"},
+        "microsoft powerpoint": {"powerpnt", "powerpoint"},
+        "powerpoint": {"powerpnt"},
+        "microsoft excel": {"excel"},
+        "excel": {"excel"},
+        "microsoft store": {"winstore.app", "applicationframehost"},
+        "store": {"winstore.app"},
+        "paint": {"mspaint"},
+        "chrome": {"chrome"},
+        "google chrome": {"chrome"},
+        "spotify": {"spotify"},
+        "vs code": {"code"},
+        "vscode": {"code"},
+        "visual studio code": {"code"},
+        "ubuntu": {"ubuntu", "wsl", "wt", "windowsterminal"},
+        "wsl": {"wsl", "ubuntu", "wt", "windowsterminal"},
+    }
+    if name in _PROCESS_ALIASES:
+        valid_stems.update(_PROCESS_ALIASES[name])
+    
     try:
         for proc in psutil.process_iter(attrs=["name"]):
             p = (proc.info.get("name") or "").lower()
             p_clean = p[:-4] if p.endswith(".exe") else p
-            if name in p_clean or p_clean in name:
+            # Exact normalized match only — no substring matching
+            if p_clean in valid_stems:
                 return True
     except Exception:
         pass
@@ -105,7 +143,17 @@ def _get_window_title_fragments(fragment: str) -> list[str]:
     """Map process/app names to possible window title fragments."""
     fragment = fragment.lower().strip()
     fragments = [fragment]
-    if fragment == "msedge":
+    if fragment in ("microsoft word", "word", "winword"):
+        fragments.extend(["word", "winword", "document1", "microsoft word"])
+    elif fragment in ("microsoft powerpoint", "powerpoint", "ppt", "powerpnt"):
+        fragments.extend(["powerpoint", "powerpnt", "presentation1", "microsoft powerpoint"])
+    elif fragment in ("microsoft excel", "excel"):
+        fragments.extend(["excel", "book1", "microsoft excel"])
+    elif fragment in ("microsoft store", "store", "windows store"):
+        fragments.extend(["microsoft store", "store"])
+    elif fragment in ("ubuntu", "ubuntu terminal", "wsl", "linux"):
+        fragments.extend(["ubuntu", "wsl", "windows terminal", "bash"])
+    elif fragment == "msedge":
         fragments.extend(["microsoft edge", "edge"])
     elif fragment == "chrome":
         fragments.extend(["google chrome", "chromium"])
@@ -133,13 +181,42 @@ def _get_expected_pids(fragment: str, psutil) -> set[int]:
     expected_pids = set()
     frag_clean = fragment.lower().strip()
     frag_clean = frag_clean[:-4] if frag_clean.endswith(".exe") else frag_clean
+    search_names = {frag_clean}
+    if frag_clean in ("microsoft word", "word", "winword"):
+        search_names.update(["winword", "word"])
+    elif frag_clean in ("microsoft powerpoint", "powerpoint", "ppt", "powerpnt"):
+        search_names.update(["powerpnt", "powerpoint"])
+    elif frag_clean in ("microsoft excel", "excel"):
+        search_names.update(["excel"])
+    elif frag_clean in ("microsoft store", "store", "windows store"):
+        search_names.update(["winstore.app", "applicationframehost", "windowsstore"])
+    elif frag_clean in ("ubuntu", "ubuntu terminal", "wsl", "linux"):
+        search_names.update(["wsl", "ubuntu", "windowsterminal", "wt"])
+    elif frag_clean in ("chrome", "google chrome"):
+        search_names.update(["chrome"])
+    elif frag_clean in ("notepad",):
+        search_names.update(["notepad"])
+    elif frag_clean in ("calculator", "calc"):
+        search_names.update(["calculatorapp", "calculator", "calc"])
+    elif frag_clean in ("paint", "mspaint"):
+        search_names.update(["mspaint"])
+    elif frag_clean in ("settings", "windows settings"):
+        search_names.update(["systemsettings", "systemsettingsadminflows"])
+    elif frag_clean in ("powershell", "windows powershell"):
+        search_names.update(["powershell", "pwsh"])
+    elif frag_clean in ("spotify",):
+        search_names.update(["spotify"])
+    elif frag_clean in ("vs code", "vscode", "visual studio code"):
+        search_names.update(["code"])
+    elif frag_clean in ("file explorer", "explorer"):
+        search_names.update(["explorer"])
+
     try:
         for proc in psutil.process_iter(attrs=["pid", "name"]):
             p = (proc.info.get("name") or "").lower()
             p_clean = p[:-4] if p.endswith(".exe") else p
-            if frag_clean in p_clean or p_clean in frag_clean:
-                expected_pids.add(proc.info["pid"])
-            elif p_clean == "windowsterminal" and frag_clean in ["powershell", "cmd", "pwsh", "command prompt"]:
+            # Exact stem match only — no substring matching
+            if p_clean in search_names:
                 expected_pids.add(proc.info["pid"])
     except Exception:
         pass
@@ -151,7 +228,7 @@ def _is_window_visible(fragment: str) -> bool:
     win32gui, win32process = _try_win32()
     psutil = _try_psutil()
     if win32gui is None or win32process is None or psutil is None:
-        return True  # can't verify — assume ok
+        return False  # can't verify — NOT verified
     
     fragments = _get_window_title_fragments(fragment)
     expected_pids = _get_expected_pids(fragment, psutil)
@@ -161,6 +238,8 @@ def _is_window_visible(fragment: str) -> bool:
         def _cb(hwnd, _):
             if win32gui.IsWindowVisible(hwnd):
                 title = win32gui.GetWindowText(hwnd).lower()
+                if not title:
+                    return True  # skip empty-title windows (invisible helpers)
                 _, pid = win32process.GetWindowThreadProcessId(hwnd)
                 
                 if pid in expected_pids or any(is_uwp_window_for_pid(hwnd, ep) for ep in expected_pids) or any(frag in title for frag in fragments):
@@ -229,7 +308,7 @@ def _is_window_foreground(fragment: str) -> bool:
     psutil = _try_psutil()
 
     if win32gui is None or win32process is None or psutil is None:
-        return True
+        return False  # can't verify — NOT verified
 
     fragments = _get_window_title_fragments(fragment)
     expected_pids = _get_expected_pids(fragment, psutil)
@@ -330,25 +409,33 @@ def verify_application_launched(app_name: str) -> VerifyResult:
     VerifyResult
     """
     name = app_name.lower().strip()
+    psutil = _try_psutil()
 
-    if not _is_process_running(name):
+    proc_running = _is_process_running(name)
+    if not proc_running and psutil:
+        expected_pids = _get_expected_pids(name, psutil)
+        if expected_pids:
+            proc_running = True
+
+    win_vis = _is_window_visible(name)
+
+    # Require BOTH a running process AND a visible window for app launch verification.
+    # A background process alone is not proof of a successful launch.
+    if not proc_running:
         return VerifyResult(
             passed=False,
             message=f"Verification failed: no running process found for '{app_name}'."
         )
-
-    if not _is_window_visible(name):
-        logger.debug(f"[VERIFY] Process '{app_name}' running but window not yet visible.")
+    
+    if not win_vis:
         return VerifyResult(
             passed=False,
-            message=(
-                f"Process '{app_name}' is running but window is not yet visible."
-            )
+            message=f"Verification failed: process running but no visible window found for '{app_name}'."
         )
 
     return VerifyResult(
         passed=True,
-        message=f"Application '{app_name}' is running with a visible window."
+        message=f"Application '{app_name}' verified: process running AND visible window confirmed."
     )
 
 
@@ -530,8 +617,13 @@ def dispatch_verify(tool: str, args: dict, result) -> VerifyResult:
     ).lower().strip()
 
     # Application launch / open tools
-    if tool in ("open_application", "launch_application", "resolve_and_open"):
-        opened_in_browser = getattr(result, "metadata", {}).get("opened_in_browser", False) or getattr(result, "resource_type", "") == "website"
+    if tool in ("open_application", "launch_application", "resolve_and_open", "open_browser", "open_website", "search_web", "open_gmail", "open_spotify", "open_telegram"):
+        opened_in_browser = (
+            getattr(result, "metadata", {}).get("opened_in_browser", False)
+            or getattr(result, "resource_type", "") == "website"
+            or tool in ("open_browser", "open_website", "search_web", "open_gmail")
+            or getattr(result, "action_type", "") in ("opened_web_app", "searched_web", "opened_url")
+        )
         reused_window = getattr(result, "metadata", {}).get("reused_window", False)
 
         # Log full window state for diagnostics
@@ -545,25 +637,23 @@ def dispatch_verify(tool: str, args: dict, result) -> VerifyResult:
             )
 
         if opened_in_browser or reused_window:
-            # For browser/reused windows: check visibility (foreground is best-effort)
+            # For browser/reused windows: check visibility or browser process
             from automation.applications import clean_query_for_matching
             tab_frag = clean_query_for_matching(app)
-            target_frag = tab_frag or app
+            target_frag = tab_frag or app or "browser"
             # Best-effort focus attempt (non-blocking for verification result)
             _is_window_foreground(target_frag)
-            # Success = window is visible, regardless of foreground status
-            if _is_window_visible(target_frag):
-                return VerifyResult(passed=True, message=f"Window for '{target_frag}' is visible and accessible.")
-            return VerifyResult(passed=False, message=f"Window for '{target_frag}' is not visible.")
+            # Success = window or browser process is visible/running
+            if _is_window_visible(target_frag) or _is_process_running("chrome") or _is_process_running("msedge") or _is_process_running("firefox") or _is_window_visible("browser"):
+                return VerifyResult(passed=True, message=f"Browser/Window for '{target_frag}' is verified.")
+            return VerifyResult(passed=False, message=f"Browser/Window for '{target_frag}' was not verified.")
 
         # For native app launches: success = process running AND window visible.
-        # Foreground/focus is attempted as best-effort but is NOT a hard requirement
-        # (Windows foreground lock can legitimately prevent focus steal).
         v_res = verify_application_launched(app)
         if not v_res.passed:
             return v_res
 
-        # Best-effort foreground promotion (result is logged but does not affect pass/fail)
+        # Best-effort foreground promotion
         fg_ok = _is_window_foreground(app)
         logger.info(
             f"[VERIFY] Focus attempt for '{app}': {'promoted to foreground' if fg_ok else 'window visible but not foreground (OS lock) — still SUCCESS'}"

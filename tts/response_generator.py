@@ -41,68 +41,65 @@ def generate_response(execution_results: list[dict[str, Any]]) -> str:
             
         # 2. Handle Execution Errors
         if not success:
-            tool_friendly = tool.replace("_", " ")
-            phrases.append(f"I encountered an error while trying to {tool_friendly}.")
+            msg = result.get("message", "")
+            if msg and ("couldn't" in msg.lower() or "failed" in msg.lower() or "not" in msg.lower()):
+                phrases.append(msg)
+            else:
+                tool_friendly = tool.replace("_", " ")
+                phrases.append(f"I encountered an error while trying to {tool_friendly}.")
             continue
             
         # 3. Handle specific tools
-        if tool == "open_browser":
-            phrases.append("Opening the browser.")
+        msg = result.get("message", "")
+
+        if tool in ("resolve_and_open", "open_application", "launch_application", "open_spotify", "open_gmail", "open_telegram"):
+            if msg:
+                phrases.append(msg)
+            else:
+                phrases.append("Opened the application.")
+        elif tool == "open_browser":
+            if msg:
+                phrases.append(msg)
+            else:
+                phrases.append("Opening the browser.")
+        elif tool == "open_website":
+            if msg:
+                phrases.append(msg)
+            else:
+                phrases.append("Opened the website.")
         elif tool == "search_web":
-            # Assume args might be passed alongside if we intercepted the full plan, 
-            # or extract from output message. The planner actually only gives us ExecutionResult.
-            # Wait, ExecutionResult has a `message`. e.g. "Searched web for: machine learning"
-            msg = result.get("message", "")
             if "Searched web for:" in msg:
                 query = msg.split("Searched web for: ")[-1]
                 phrases.append(f"Searching for {query}.")
+            elif msg:
+                phrases.append(msg)
             else:
                 phrases.append("Searching the web.")
-                
-        elif tool == "open_application":
-            msg = result.get("message", "")
-            if "Launched application:" in msg:
-                # "Launched application: vscode (code)." -> "vscode"
-                match = re.search(r"Launched application:\s*(.+?)\s*\(", msg)
-                app_name = match.group(1) if match else "the application"
-                phrases.append(f"Opening {app_name}.")
-            else:
-                phrases.append("Opening the application.")
-                
         elif tool == "open_terminal":
             phrases.append("Opening the terminal.")
-            
         elif tool == "open_file_manager":
             phrases.append("Opening the file manager.")
-            
         elif tool == "check_time":
             phrases.append(_clean_time_string(output))
-            
         elif tool == "take_screenshot":
             phrases.append("Taking a screenshot.")
-            
         elif tool == "list_files":
-            msg = result.get("message", "")
-            # "Listed 18 files in '.'." -> extract 18
             match = re.search(r"Listed (\d+) files", msg)
             count = match.group(1) if match else "several"
             phrases.append(f"I found {count} files in the directory.")
-            
         elif tool == "check_memory":
             phrases.append("I have retrieved the memory usage.")
-            
         elif tool == "system_info":
             phrases.append("I have retrieved the system information.")
-            
         elif tool == "find_document_by_context":
             if output and isinstance(output, str):
                 phrases.append(output)
             else:
                 phrases.append("I have searched for the requested document.")
-                
         else:
-            # Generic success
-            if output and isinstance(output, str) and not output.startswith("{"):
+            if msg and not msg.startswith("{"):
+                phrases.append(msg)
+            elif output and isinstance(output, str) and not output.startswith("{"):
                 phrases.append(output)
             else:
                 tool_friendly = tool.replace("_", " ")
@@ -114,5 +111,5 @@ def generate_response(execution_results: list[dict[str, Any]]) -> str:
     elif len(phrases) == 2:
         return f"{phrases[0]} {phrases[1]}".replace("Opening the browser. Searching for", "Opening the browser and searching for")
     else:
-        # Join the first N-1 with commas, and the last with "and"
         return " ".join(phrases[:-1]) + " and " + phrases[-1].lower()
+
