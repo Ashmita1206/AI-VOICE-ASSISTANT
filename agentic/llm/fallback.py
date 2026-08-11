@@ -92,12 +92,24 @@ def apply_heuristic_fallback(transcription: str) -> PlannerOutput:
             steps=[PlannerStep(tool="search_web", args={"query": query_text})]
         )
 
-    # Rule 0.3: File Explorer Context Search
+    # Rule 0.3: File Explorer Context Search (Must NOT capture explicit app launch commands)
+    clean_text = re.sub(r"[.!?]+$", "", text.strip())
+    known_app_patterns = r"\b(microsoft\s+word|word|microsoft\s+powerpoint|powerpoint|ppt|microsoft\s+excel|excel|microsoft\s+store|store|ubuntu|ubuntu\s+terminal|vs\s+code|visual\s+studio\s+code|calculator|notepad|file\s+explorer)\b"
+    if re.search(r"^(?:open|launch|start)\s+(?:microsoft\s+word|word|microsoft\s+powerpoint|powerpoint|ppt|microsoft\s+excel|excel|microsoft\s+store|store|ubuntu|ubuntu\s+terminal|vs\s+code|visual\s+studio\s+code|calculator|notepad|file\s+explorer)$", clean_text, flags=re.IGNORECASE):
+        app_name = clean_text.split(" ", 1)[1].strip()
+        return PlannerOutput(
+            intent="launch_application",
+            confidence=0.95,
+            reasoning=f"Matched application launch command for '{app_name}'.",
+            steps=[PlannerStep(tool="resolve_and_open", args={"query": app_name})]
+        )
+
     find_verbs = r"(find|search|locate|look\s+for|open|where\s+is|need|show\s+me)"
     doc_nouns = r"(file(?!\s*manager)|document|report|proposal|presentation|pdf|ppt|word|excel|spreadsheet|invoice|notes?(?!pad)|notebook(?!s)|deck)"
-    if re.search(find_verbs, text) and re.search(doc_nouns, text):
+    if re.search(find_verbs, clean_text, flags=re.IGNORECASE) and re.search(doc_nouns, clean_text, flags=re.IGNORECASE):
         negative_words = r"\b(notepad|open\s+notes|create\s+file|edit\s+txt|write|type|file\s+explorer|explorer)\b"
-        if not re.search(negative_words, text):
+        is_explicit_app_command = bool(re.search(r"^(?:open|launch|start)\s+" + known_app_patterns + r"$", clean_text, flags=re.IGNORECASE))
+        if not re.search(negative_words, clean_text, flags=re.IGNORECASE) and not is_explicit_app_command:
             query_text = text
             query_text = re.sub(rf"^(?:can\s+you\s+)?{find_verbs}\s+(?:the\s+|my\s+|a\s+)?{doc_nouns}(?:s)?\s+(?:about\s+|on\s+|for\s+)?", "", query_text)
             query_text = re.sub(rf"^(?:can\s+you\s+)?{find_verbs}\s+(?:the\s+|my\s+|a\s+)?", "", query_text)

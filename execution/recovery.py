@@ -394,12 +394,25 @@ def recover_step(
         process_running = False
         try:
             import psutil
+            from automation.applications import clean_query_for_matching, resolve_canonical_app, CANONICAL_ALIASES
+            cleaned = clean_query_for_matching(app_name)
+            canonical = resolve_canonical_app(cleaned)
+            search_terms = {app_name.lower(), cleaned.lower()}
+            if canonical:
+                search_terms.add(canonical.lower())
+            if canonical in CANONICAL_ALIASES:
+                for alias in CANONICAL_ALIASES[canonical]:
+                    search_terms.add(alias.lower())
+
             for proc in psutil.process_iter(attrs=["name"]):
                 p_name = (proc.info.get("name") or "").lower()
                 p_clean = p_name[:-4] if p_name.endswith(".exe") else p_name
-                if p_clean and (app_name in p_clean or p_clean in app_name):
-
-                    process_running = True
+                if p_clean:
+                    for st in search_terms:
+                        if st in p_clean or p_clean in st:
+                            process_running = True
+                            break
+                if process_running:
                     break
         except Exception:
             pass

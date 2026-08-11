@@ -44,6 +44,7 @@ RULES:
 7. Argument extraction: Extract explicit entities from the text (e.g., website names, search queries). Do NOT hallucinate arguments not present in the user's request.
 8. Fallback: If the user's request cannot be fulfilled by ANY of the available tools, output exactly one step with `"tool": "resolve_and_open"` and the query argument set to the user's request.
 9. Confidence: Your `thought` should reflect your confidence. If the text is garbled, select the `resolve_and_open` tool.
+10. Application Intent Disambiguation: Commands like "Open Microsoft Word", "Open Microsoft PowerPoint", "Open Microsoft Store", "Open Ubuntu Terminal" express an application launch goal. Route them to `resolve_and_open` or `launch_application` for the specified application name, NOT `find_document_by_context`. Reserve `find_document_by_context` only for explicit document search requests (e.g. "Find my report document", "Search for budget spreadsheet").
 """
 
 FEW_SHOT_EXAMPLES = [
