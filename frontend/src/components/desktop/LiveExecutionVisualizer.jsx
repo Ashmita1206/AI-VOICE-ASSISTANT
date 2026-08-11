@@ -46,6 +46,7 @@ export function LiveExecutionVisualizer({
     let isComplete = false;
     let isActive = false;
     let hasData = false;
+    let isFailed = false;
 
     switch (cfg.key) {
       case 'transcript':
@@ -73,11 +74,23 @@ export function LiveExecutionVisualizer({
         hasData = !!plannerOutput;
         isActive = !!intent && !plannerOutput && isProcessing;
         break;
-      case 'execution':
-        isComplete = Array.isArray(executionLogs) && executionLogs.length > 0 && !isProcessing;
-        hasData = Array.isArray(executionLogs) && executionLogs.length > 0;
-        isActive = Array.isArray(executionLogs) && executionLogs.length > 0 && isProcessing;
+      case 'execution': {
+        const hasLogs = Array.isArray(executionLogs) && executionLogs.length > 0;
+        const hasFailedLog = hasLogs && executionLogs.some((log) => {
+          if (typeof log === 'object' && log !== null) {
+            return log.success === false || log.status === 'failed' || log.status === 'error' || log.state === 'failure';
+          }
+          if (typeof log === 'string') {
+            return log.includes('failed') || log.includes('error');
+          }
+          return false;
+        });
+        isComplete = hasLogs && !isProcessing && !hasFailedLog;
+        hasData = hasLogs;
+        isActive = hasLogs && isProcessing;
+        isFailed = hasFailedLog && !isProcessing;
         break;
+      }
       case 'response':
         isComplete = !!responseText;
         hasData = !!responseText;
@@ -85,7 +98,7 @@ export function LiveExecutionVisualizer({
         break;
     }
 
-    return { ...cfg, isComplete, isActive, hasData };
+    return { ...cfg, isComplete, isActive, hasData, isFailed };
   });
 
   // Auto-advance to the latest active/completed phase as backend streams, unless user manually chose a tab
@@ -458,12 +471,15 @@ export function LiveExecutionVisualizer({
                   transition: 'all 180ms ease',
                 }}
               >
-                {phase.isComplete ? (
+                {phase.isFailed ? (
+                  <AlertCircle size={14} color="var(--error-text)" />
+                ) : phase.isComplete ? (
                   <CheckCircle2 size={14} color="var(--success-text)" />
                 ) : (
                   <Icon size={14} color={phase.isActive ? phase.color : 'var(--text-muted)'} style={phase.isActive ? { animation: 'pulse-ring 1.8s infinite' } : {}} />
                 )}
                 <span>{phase.label}</span>
+                {phase.isFailed && <span style={{ color: 'var(--error-text)', fontSize: '0.75rem', fontWeight: 800 }}>✕</span>}
                 {phase.isComplete && <span style={{ color: 'var(--success-text)', fontSize: '0.75rem', fontWeight: 800 }}>✓</span>}
               </button>
             );
