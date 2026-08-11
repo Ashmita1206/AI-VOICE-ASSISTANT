@@ -51,9 +51,8 @@ def create_app() -> Flask:
     import config
     import requests
     try:
-        # Check /health endpoint if possible, otherwise just a quick HEAD or GET
         health_url = config.COLAB_API_URL.replace("/plan", "/health")
-        resp = requests.get(health_url, timeout=5)
+        resp = requests.get(health_url, timeout=0.5)
         if resp.status_code == 200:
             print("Remote Planner: Connected")
         else:
