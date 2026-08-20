@@ -1,0 +1,126 @@
+{
+  "total_files": 50,
+  "total_passed": 0,
+  "total_failed": 0,
+  "total_skipped": 0,
+  "total_errors": 9,
+  "files": {
+    "tests\\test_agentic_discovery.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 12s"
+    },
+    "tests\\test_automation.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 12s"
+    },
+    "tests\\test_confirm_api.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 12s"
+    },
+    "tests\\test_confirmation.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 12s"
+    },
+    "tests\\test_ctypes_enum.py": {
+      "returncode": 5,
+      "status": "FAILED",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "no tests ran in 1.32s"
+    },
+    "tests\\test_document_retrieval.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 12s"
+    },
+    "tests\\test_document_search.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 12s"
+    },
+    "tests\\test_execution_dispatch.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 12s"
+    },
+    "tests\\test_execution_pipeline_fix.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 12s"
+    },
+    "tests\\test_executor.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 12s"
+    },
+    "tests\\test_generic_launch_architecture.py": {
+      "returncode": 1,
+      "status": "FAILED",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "ImportError: DLL load failed while importing _ssl: A dynamic link library (DLL) initialization routine failed."
+    },
+    "tests\\test_get_windows.py": {
+      "returncode": 1,
+      "status": "FAILED",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "ImportError: DLL load failed while importing _ssl: A dynamic link library (DLL) initialization routine failed."
+    },
+    "tests\\test_interrupts.py": {
+      "returncode": 1,
+      "status": "FAILED",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "ImportError: DLL load failed while importing _ssl: A dynamic link library (DLL) initialization routine failed."
+    }
+  }
+}

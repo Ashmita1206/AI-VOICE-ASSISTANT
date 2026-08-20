@@ -1,0 +1,234 @@
+{
+  "total_files": 50,
+  "total_passed": 40,
+  "total_failed": 2,
+  "total_skipped": 0,
+  "total_errors": 8,
+  "files": {
+    "tests\\test_agentic_discovery.py": {
+      "returncode": 1,
+      "status": "FAILED",
+      "passed": 8,
+      "failed": 2,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "2 failed, 8 passed in 6.48s"
+    },
+    "tests\\test_automation.py": {
+      "returncode": 0,
+      "status": "PASSED",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "1 passed in 10.20s"
+    },
+    "tests\\test_confirm_api.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 20s"
+    },
+    "tests\\test_confirmation.py": {
+      "returncode": 0,
+      "status": "PASSED",
+      "passed": 9,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "9 passed in 9.82s"
+    },
+    "tests\\test_ctypes_enum.py": {
+      "returncode": 5,
+      "status": "NO_TESTS",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "no tests ran in 1.40s"
+    },
+    "tests\\test_document_retrieval.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 20s"
+    },
+    "tests\\test_document_search.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 20s"
+    },
+    "tests\\test_execution_dispatch.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 20s"
+    },
+    "tests\\test_execution_pipeline_fix.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 20s"
+    },
+    "tests\\test_executor.py": {
+      "returncode": 0,
+      "status": "PASSED",
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "2 passed in 9.39s"
+    },
+    "tests\\test_generic_launch_architecture.py": {
+      "returncode": 0,
+      "status": "PASSED",
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "8 passed in 11.47s"
+    },
+    "tests\\test_get_windows.py": {
+      "returncode": 5,
+      "status": "NO_TESTS",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "no tests ran in 0.27s"
+    },
+    "tests\\test_interrupts.py": {
+      "returncode": 0,
+      "status": "PASSED",
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "3 passed in 14.13s"
+    },
+    "tests\\test_launch_and_confirm.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 20s"
+    },
+    "tests\\test_launch_and_find_telegram.py": {
+      "returncode": 5,
+      "status": "NO_TESTS",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "no tests ran in 12.73s"
+    },
+    "tests\\test_memory.py": {
+      "returncode": 0,
+      "status": "PASSED",
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "3 passed in 0.07s"
+    },
+    "tests\\test_nlp_command_registry.py": {
+      "returncode": 5,
+      "status": "NO_TESTS",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "no tests ran in 0.11s"
+    },
+    "tests\\test_nlp_entity_extractor.py": {
+      "returncode": 5,
+      "status": "NO_TESTS",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "no tests ran in 0.08s"
+    },
+    "tests\\test_nlp_intent_classifier.py": {
+      "returncode": 5,
+      "status": "NO_TESTS",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "no tests ran in 0.11s"
+    },
+    "tests\\test_nlp_pipeline.py": {
+      "returncode": 5,
+      "status": "NO_TESTS",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "no tests ran in 0.11s"
+    },
+    "tests\\test_nlp_preprocess.py": {
+      "returncode": 5,
+      "status": "NO_TESTS",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "no tests ran in 0.09s"
+    },
+    "tests\\test_nlp_schemas.py": {
+      "returncode": 0,
+      "status": "PASSED",
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "3 passed in 0.07s"
+    },
+    "tests\\test_notepad.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 20s"
+    },
+    "tests\\test_permissions.py": {
+      "returncode": 0,
+      "status": "PASSED",
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 0,
+      "summary": "3 passed in 0.08s"
+    },
+    "tests\\test_remote_embeddings.py": {
+      "returncode": -1,
+      "status": "TIMEOUT",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 1,
+      "summary": "Timed out after 20s"
+    }
+  }
+}
