@@ -82,3 +82,10 @@ data/recovery_*.png
 .ipynb_checkpoints/
 
 .gemini/cache/system_index.json
+
+# =========================
+# Telegram Pyrogram Session Files
+# =========================
+*.session
+*.session-journal
+telegram_assistant.session*
