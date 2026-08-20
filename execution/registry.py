@@ -36,6 +36,7 @@ def load_all_tools() -> None:
         import automation.desktop
         import automation.filesystem
         import automation.whatsapp
+        import automation.telegram
         import automation.notepad
         import automation.file_context_search_tool  # Context-based File Explorer Search
         import automation.document_retrieval_tool # v2 document retrieval

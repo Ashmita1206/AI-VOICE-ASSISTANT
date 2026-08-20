@@ -121,6 +121,43 @@ class IntentClassifier:
                 if top_candidate["confidence"] >= self.threshold:
                     best_overall = replace(best_overall, intent=top_candidate["intent"].name, confidence=top_candidate["confidence"])
 
+        # Priority Rule: Telegram commands (both open application and messaging)
+        raw_clean = text.lower()
+        if "telegram" in norm_text or "telegram" in raw_clean:
+            open_verbs = r"^(?:open|launch|start|check|kholo|chalao)\s+telegram(?:\s+desktop)?$"
+            open_verbs_suffix = r"^telegram(?:\s+desktop)?\s+(?:open|kholo|chalao|start|launch)(?:\s+karo|\s+kar\s+do)?$"
+            is_open_cmd = bool(re.match(open_verbs, norm_text)) or bool(re.match(open_verbs_suffix, norm_text)) or \
+                          bool(re.match(open_verbs, raw_clean)) or bool(re.match(open_verbs_suffix, raw_clean))
+
+            if is_open_cmd:
+                # Force open_application for Telegram opening commands
+                return CommandIntent(
+                    intent="open_application",
+                    entities={"application": "telegram"},
+                    confidence=1.0,
+                    raw_text=text
+                )
+            else:
+                comm_words = ("send", "message", "tell", "text", "bhejo", "saying", "bol do", "bol", "bhej")
+                if any(w in norm_text for w in comm_words) or any(w in raw_clean for w in comm_words):
+                    from automation.telegram.nlu import parse_telegram_input
+                    res = parse_telegram_input("NEW_COMMAND", text)
+                    if not getattr(res, "recipient_query", None):
+                        res = parse_telegram_input("NEW_COMMAND", norm_text)
+
+                    entities = {}
+                    if getattr(res, "recipient_query", None):
+                        entities["contact"] = res.recipient_query
+                    if getattr(res, "message_text", None):
+                        entities["message"] = res.message_text
+
+                    return CommandIntent(
+                        intent="send_telegram_message",
+                        entities=entities,
+                        confidence=0.95,
+                        raw_text=text
+                    )
+
         if not best_overall or best_overall.confidence < self.threshold:
             return CommandIntent(
                 intent="unknown",
@@ -136,14 +173,15 @@ class IntentClassifier:
             best_overall = replace(best_overall, intent="open_website")
 
         # Re-resolve intent based on application target (e.g. search on Spotify -> play_music)
-        if best_overall.intent in ("search_web", "open_application") and "application" in best_overall.entities:
+        if best_overall.intent in ("search_web", "open_application", "send_message", "open_resource") and "application" in best_overall.entities:
             app_val = best_overall.entities["application"].lower().strip()
             if "spotify" in app_val:
                 best_overall = replace(best_overall, intent="play_music")
-            elif "whatsapp" in app_val:
+            elif "whatsapp" in app_val and best_overall.intent in ("send_message", "open_resource"):
                 best_overall = replace(best_overall, intent="send_message")
 
         return best_overall
+
 
     def rank_intents(self, text: str) -> list[dict[str, Any]]:
         """Rank all intents against the normalized text."""

@@ -245,8 +245,10 @@ def get_pending_confirmation() -> dict[str, Any] | None:
         elapsed = time.time() - pending_data.get("created_at", time.time())
         return {
             "id": pending_data["id"],
+            "confirmation_type": "execution_plan",
             "message": "I will perform these actions to execute your request",
             "plan": plan_dict,
+            "steps": steps,
             "permissions": permissions,
             "estimated_actions": estimated_actions,
             "remaining_seconds": max(0, int(60 - elapsed)),

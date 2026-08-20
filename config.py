@@ -44,6 +44,10 @@ class PathsConfig(BaseModel):
     whatsapp_user_data_dir: str = Field(
         default_factory=lambda: os.path.expanduser("~/.whatsapp_automation_profile")
     )
+    telegram_user_data_dir: str = Field(
+        default_factory=lambda: os.path.expanduser("~/.telegram_automation_profile")
+    )
+
 
 
 class AudioConfig(BaseModel):
@@ -126,6 +130,12 @@ class AutomationConfig(BaseModel):
     whatsapp_url: str = Field(default="https://web.whatsapp.com")
     whatsapp_login_timeout: int = Field(default=60000)
     whatsapp_element_timeout: int = Field(default=5000)
+
+    # Telegram Web Automation
+    telegram_web_url: str = Field(default="https://web.telegram.org/a/")
+    telegram_login_timeout: int = Field(default=60000)
+    telegram_element_timeout: int = Field(default=5000)
+
 
 
 class AppConfig(BaseModel):
@@ -235,4 +245,9 @@ TYPING_INTERVAL = config.automation.typing_interval
 WHATSAPP_URL = config.automation.whatsapp_url
 WHATSAPP_LOGIN_TIMEOUT = config.automation.whatsapp_login_timeout
 WHATSAPP_ELEMENT_TIMEOUT = config.automation.whatsapp_element_timeout
+TELEGRAM_WEB_URL = config.automation.telegram_web_url
+TELEGRAM_USER_DATA_DIR = config.paths.telegram_user_data_dir
+TELEGRAM_LOGIN_TIMEOUT = config.automation.telegram_login_timeout
+TELEGRAM_ELEMENT_TIMEOUT = config.automation.telegram_element_timeout
 PYAUTOGUI_FAILSAFE = config.automation.pyautogui_failsafe
+

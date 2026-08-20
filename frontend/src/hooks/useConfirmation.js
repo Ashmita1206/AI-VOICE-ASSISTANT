@@ -4,17 +4,21 @@ export function useConfirmation(confirmationData, onStreamEvent) {
   const [countdown, setCountdown] = useState(60);
   const [isEditingPlan, setIsEditingPlan] = useState(false);
   const [editedPlanJson, setEditedPlanJson] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (!confirmationData) {
       setCountdown(60);
       setIsEditingPlan(false);
+      setIsSubmitting(false);
       return;
     }
 
-    const initTimeout = confirmationData.timeout || 60;
+    const initTimeout = confirmationData.timeout || confirmationData.remaining_seconds || 60;
     setCountdown(initTimeout);
-    setEditedPlanJson(JSON.stringify(confirmationData.steps || [], null, 2));
+    setIsSubmitting(false);
+    const initialSteps = confirmationData.steps || confirmationData.plan?.steps || [];
+    setEditedPlanJson(JSON.stringify(initialSteps, null, 2));
 
     const timer = setInterval(() => {
       setCountdown((prev) => {
@@ -30,7 +34,7 @@ export function useConfirmation(confirmationData, onStreamEvent) {
   }, [confirmationData]);
 
   const submitDecision = useCallback(async (decision) => {
-    if (!confirmationData) return;
+    if (!confirmationData || isSubmitting) return;
 
     let parsedSteps = null;
     if (decision === 'proceed' && isEditingPlan && editedPlanJson.trim()) {
@@ -43,6 +47,7 @@ export function useConfirmation(confirmationData, onStreamEvent) {
     }
 
     try {
+      setIsSubmitting(true);
       const response = await fetch('/confirm?stream=true', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
@@ -84,12 +89,20 @@ export function useConfirmation(confirmationData, onStreamEvent) {
         }
       } else {
         const result = await response.json();
-        if (onStreamEvent) onStreamEvent({ stage: 'completed', result });
+        if (onStreamEvent) {
+          if (decision === 'cancel') {
+            onStreamEvent({ stage: 'done', status: 'cancelled', message: result.message || 'Action cancelled.' });
+          } else {
+            onStreamEvent({ stage: 'completed', result });
+          }
+        }
       }
     } catch (err) {
       console.error('[CONFIRM] Failed to send decision:', err);
+    } finally {
+      setIsSubmitting(false);
     }
-  }, [confirmationData, isEditingPlan, editedPlanJson, onStreamEvent]);
+  }, [confirmationData, isSubmitting, isEditingPlan, editedPlanJson, onStreamEvent]);
 
   return {
     countdown,
@@ -97,6 +110,7 @@ export function useConfirmation(confirmationData, onStreamEvent) {
     setIsEditingPlan,
     editedPlanJson,
     setEditedPlanJson,
+    isSubmitting,
     submitDecision,
   };
 }

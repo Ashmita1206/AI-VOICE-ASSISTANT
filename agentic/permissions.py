@@ -61,6 +61,21 @@ class PermissionManager:
         "wait_until_application_ready",
         "wait_until_element_ready",
         "wait_until_browser_loaded",
+        # Telegram fine-grained automation tools (self-governing confirmations)
+        "open_telegram",
+        "open_telegram_web",
+        "open_telegram_web_only",
+        "search_telegram_contact",
+        "verify_telegram_contact",
+        "open_telegram_chat",
+        "verify_telegram_chat_header",
+        "focus_telegram_composer",
+        "type_telegram_message",
+        "send_telegram_message",
+        "verify_telegram_message_sent",
+        "verify_telegram_message_bubble",
+        "close_telegram_tab",
+        "close_telegram",
     }
     
     # Tools that always require explicit button confirmation
@@ -72,7 +87,6 @@ class PermissionManager:
         "execute_shell",
         "send_whatsapp_message",
         "take_screenshot",
-        "open_telegram",
         "open_gmail",
         "open_spotify",
     }
@@ -85,7 +99,7 @@ class PermissionManager:
     @classmethod
     def requires_confirmation(cls, tool_name: str, args: dict = None) -> bool:
         """Return True if the tool requires explicit confirmation."""
-        if tool_name in ("open_telegram", "open_gmail", "open_spotify"):
+        if tool_name in ("open_gmail", "open_spotify"):
             return True
         if tool_name == "perform_app_action" and args:
             app = args.get("app", "").lower()
@@ -97,9 +111,6 @@ class PermissionManager:
     @classmethod
     def build_confirmation_message(cls, tool_name: str, args: dict) -> str:
         """Generate a natural language confirmation prompt for dangerous tools."""
-        if tool_name == "open_telegram":
-            return "Open Telegram? (Requires System & Network Access permission)"
-
         if tool_name == "open_gmail":
             return "Open Gmail? (Requires Network Access permission)"
 

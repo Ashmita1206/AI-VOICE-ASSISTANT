@@ -4,6 +4,7 @@ export function usePipelineStream() {
   const [fsmState, setFsmState] = useState('Idle');
   const [statusMessage, setStatusMessage] = useState('');
   const [transcript, setTranscript] = useState('');
+  const [translatedText, setTranslatedText] = useState('');
   const [accuracy, setAccuracy] = useState(null);
   const [intent, setIntent] = useState('');
   const [entities, setEntities] = useState(null);
@@ -22,6 +23,7 @@ export function usePipelineStream() {
 
   const resetResults = useCallback(() => {
     setTranscript('');
+    setTranslatedText('');
     setAccuracy(null);
     setIntent('');
     setEntities(null);
@@ -47,12 +49,23 @@ export function usePipelineStream() {
 
     const payload = data.data || {};
     const stage = data.stage;
+    const status = data.status;
 
     switch (stage) {
       case 'transcribing':
       case 'transcript': {
+        if (status === 'processing') {
+          setFsmState('Transcribing');
+          setStatusMessage('Processing request...');
+        } else if (status === 'completed') {
+          setFsmState('Understanding');
+          setStatusMessage('Processing request...');
+        }
         const textVal = data.transcript || payload.text || payload.transcription;
         if (textVal) setTranscript(textVal);
+
+        const transVal = payload.translated_text || data.translated_text;
+        if (transVal) setTranslatedText(transVal);
 
         const sttObj = payload.stt || payload.stt_metrics || data.stt;
         if (sttObj) {
@@ -72,6 +85,8 @@ export function usePipelineStream() {
       }
 
       case 'intent': {
+        setFsmState('Understanding');
+        setStatusMessage('Processing request...');
         const intentVal = payload.name || payload.intent || data.intent;
         if (intentVal) setIntent(intentVal);
         if (payload.entities) setEntities(payload.entities);
@@ -80,12 +95,28 @@ export function usePipelineStream() {
       }
 
       case 'entities': {
+        setFsmState('Understanding');
+        setStatusMessage('Processing request...');
         const entObj = payload.entities !== undefined ? payload.entities : (data.entities !== undefined ? data.entities : payload);
         if (entObj !== undefined && entObj !== null) setEntities(entObj);
         break;
       }
 
+      case 'discovery': {
+        setFsmState('Planning');
+        setStatusMessage('Processing request...');
+        break;
+      }
+
       case 'planner': {
+        if (status === 'failed') {
+          setFsmState('Failed');
+          setStatusMessage('Failed');
+          setIsProcessing(false);
+        } else {
+          setFsmState('Planning');
+          setStatusMessage('Processing request...');
+        }
         const planObj = payload.planner || (payload.steps || payload.reasoning || payload.thought ? payload : data.planner);
         if (planObj) setPlannerOutput(planObj);
         break;
@@ -96,18 +127,35 @@ export function usePipelineStream() {
         if (confObj && (confObj.id || data.confirmation_id)) {
           setConfirmationData({
             id: confObj.id || data.confirmation_id,
+            confirmation_type: confObj.confirmation_type || data.confirmation_type || null,
             action: confObj.message || data.action_name || 'Action Execution',
             summary: confObj.message || data.action_summary || 'Confirmation Required',
-            steps: confObj.plan?.steps || data.steps || confObj.estimated_actions || [],
+            message: confObj.message || data.message,
+            contact: confObj.contact || data.contact,
+            message_text: confObj.message_text || data.message_text,
+            steps: confObj.plan?.steps || data.steps || confObj.steps || confObj.estimated_actions || [],
             timeout: confObj.remaining_seconds || data.timeout_seconds || 60,
           });
           setFsmState('Awaiting Confirmation');
+          setStatusMessage('Awaiting Confirmation');
           setIsProcessing(false);
         }
         break;
       }
 
       case 'execution': {
+        if (status === 'running') {
+          setFsmState('Executing');
+          setStatusMessage('Executing...');
+        } else if (status === 'failed' || status === 'error') {
+          setFsmState('Failed');
+          setStatusMessage('Failed');
+          setIsProcessing(false);
+        } else if (status === 'completed') {
+          setFsmState('Executing');
+          setStatusMessage('Executing...');
+        }
+
         if (data.execution_step || data.log || payload.log || payload.execution_step) {
           const logItem = data.log || data.execution_step || payload.log || payload.execution_step;
           setExecutionLogs((prev) => [...prev, logItem]);
@@ -150,6 +198,9 @@ export function usePipelineStream() {
         break;
 
       case 'response': {
+        if (status === 'processing') {
+          setStatusMessage('Processing request...');
+        }
         const respText = payload.text || payload.response_text || data.response_text;
         if (respText) setResponseText(respText);
         const url = payload.audio_url || data.audio_url;
@@ -160,24 +211,42 @@ export function usePipelineStream() {
       case 'done':
       case 'completed': {
         const confObj = payload.confirmation || (payload.data && payload.data.confirmation);
-        if (data.status === 'requires_confirmation' || confObj) {
+        if (status === 'requires_confirmation' || confObj) {
           const conf = confObj || data;
           setConfirmationData({
             id: conf.id || data.confirmation_id,
+            confirmation_type: conf.confirmation_type || data.confirmation_type || null,
             action: conf.message || data.action_name || 'Action Execution',
             summary: conf.message || data.action_summary || 'Confirmation Required',
-            steps: conf.plan?.steps || data.steps || conf.estimated_actions || [],
+            message: conf.message || data.message,
+            contact: conf.contact || data.contact,
+            message_text: conf.message_text || data.message_text,
+            steps: conf.plan?.steps || data.steps || conf.steps || conf.estimated_actions || [],
             timeout: conf.remaining_seconds || data.timeout_seconds || 60,
           });
           setFsmState('Awaiting Confirmation');
+          setStatusMessage('Awaiting Confirmation');
           setIsProcessing(false);
           break;
         }
-        setIsProcessing(false);
-        setFsmState('Completed');
+
+        if (status === 'error' || status === 'failed' || payload.status === 'error') {
+          setFsmState('Failed');
+          setStatusMessage('Failed');
+          setIsProcessing(false);
+        } else if (status === 'cancelled' || data.result?.message === 'Action cancelled.' || payload.message === 'Action cancelled.' || data.message === 'Action cancelled.') {
+          setFsmState('Cancelled');
+          setStatusMessage('Cancelled');
+          setIsProcessing(false);
+        } else {
+          setFsmState('Completed');
+          setStatusMessage('Completed');
+          setIsProcessing(false);
+        }
 
         if (payload) {
           if (payload.transcription && !transcript) setTranscript(payload.transcription);
+          if (payload.translated_text && !translatedText) setTranslatedText(payload.translated_text);
           if (payload.stt && !accuracy) {
             setAccuracy({
               model: payload.stt.model || 'Faster-Whisper',
@@ -223,11 +292,11 @@ export function usePipelineStream() {
 
         if (respText || data.summary || payload.summary) {
           setCompletionPopup({
-            title: data.status === 'error' ? 'Task Failed' : 'Task Completed',
-            response: respText || 'Action executed.',
+            title: status === 'error' || status === 'failed' ? 'Task Failed' : (status === 'cancelled' ? 'Task Cancelled' : 'Task Completed'),
+            response: respText || (status === 'cancelled' ? 'Action cancelled.' : 'Action executed.'),
             summary: data.summary || payload.summary || data.logs || [],
-            error: data.error || (data.status === 'error' ? data.message : null),
-            isError: data.status === 'error',
+            error: data.error || (status === 'error' ? data.message : null),
+            isError: status === 'error' || status === 'failed',
           });
         }
         break;
@@ -247,7 +316,7 @@ export function usePipelineStream() {
     resetResults();
     setIsProcessing(true);
     setFsmState('Transcribing');
-    setStatusMessage('Streaming request to assistant server...');
+    setStatusMessage('Processing request...');
 
     const formData = new FormData();
     if (audioBlob) {
@@ -295,11 +364,28 @@ export function usePipelineStream() {
           }
         }
       }
+
+      setIsProcessing(false);
+      setFsmState((prev) => {
+        if (prev === 'Awaiting Confirmation' || prev === 'Failed' || prev === 'Cancelled' || prev === 'Completed') {
+          return prev;
+        }
+        return 'Completed';
+      });
+      setStatusMessage((prev) => {
+        if (prev === 'Awaiting Confirmation' || prev === 'Failed' || prev === 'Cancelled' || prev === 'Completed') {
+          return prev;
+        }
+        return 'Completed';
+      });
     } catch (err) {
       if (err.name !== 'AbortError') {
         console.error('[PIPELINE] Stream error:', err);
         setFsmState('Failed');
-        setStatusMessage(`Pipeline error: ${err.message}`);
+        setStatusMessage('Failed');
+      } else {
+        setFsmState('Cancelled');
+        setStatusMessage('Cancelled');
       }
       setIsProcessing(false);
     }
@@ -314,8 +400,11 @@ export function usePipelineStream() {
 
   return {
     fsmState,
+    setFsmState,
     statusMessage,
+    setStatusMessage,
     transcript,
+    translatedText,
     accuracy,
     intent,
     entities,
@@ -324,6 +413,7 @@ export function usePipelineStream() {
     responseText,
     audioUrl,
     isProcessing,
+    setIsProcessing,
     confirmationData,
     setConfirmationData,
     fileSearchData,

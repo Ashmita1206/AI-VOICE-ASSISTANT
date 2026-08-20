@@ -176,6 +176,7 @@ class RemoteWhisperSTT:
         # ── Normalise / fill defaults ─────────────────────────────────
         result: TranscriptionResult = {
             "text":                 data.get("text", ""),
+            "translated_text":     data.get("translated_text", data.get("text", "")),
             "raw_text":             data.get("raw_text", data.get("text", "")),
             "segments":             data.get("segments", []),
             "language":             data.get("language", ""),
