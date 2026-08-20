@@ -32,7 +32,28 @@ def handle_pending_confirmation(transcript: str) -> Tuple[bool, Optional[str]]:
     Returns (handled: bool, response_message: str | None).
     """
     session = get_session()
-    
+
+    # 0. Check Telegram router pending state
+    try:
+        from automation.telegram import get_telegram_router, TelegramFlowMode, FlowStatus, _run_async
+        tg_router = get_telegram_router()
+        if tg_router.state.mode in (TelegramFlowMode.DISAMBIGUATION, TelegramFlowMode.CONFIRMATION):
+            if session.is_confirmation_timeout():
+                tg_router.reset()
+                session.clear_pending_action()
+                return True, "Telegram confirmation timed out. The action has been cancelled."
+
+            res = _run_async(tg_router.handle_input(transcript))
+
+            if res.status in (FlowStatus.SEND_KEY_DISPATCHED, FlowStatus.CANCELLED, FlowStatus.ALREADY_EXECUTED, FlowStatus.ERROR):
+                session.clear_pending_action()
+
+            return True, res.message
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Telegram pending interceptor exception: %s", e, exc_info=True)
+        pass
+
     if not session.pending_action:
         return False, None
         

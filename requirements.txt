@@ -35,6 +35,8 @@ playwright>=1.54.0
 pyautogui>=0.9.54
 pywin32>=308
 psutil>=7.0.0
+pyrogram>=2.0.0
+tgcrypto>=1.2.0
 
 # Database
 sqlalchemy>=2.0.0

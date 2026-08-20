@@ -217,12 +217,31 @@ _TOOLS: list[ToolDefinition] = [
                     "type": "string",
                     "description": "The action to perform (e.g., 'play', 'pause', 'send_message')."
                 },
-                "payload": {
-                    "type": "object",
-                    "description": "Arbitrary payload mapping containing arguments (e.g. {'song': 'Darkhaast'}, {'contact': 'Harshita', 'message': 'hi'})."
-                }
             },
             "required": ["app", "action"]
+        }
+    ),
+
+    ToolDefinition(
+        name="send_telegram_message",
+        description="Draft a Telegram message, open a visual draft preview for human inspection, and require user voice confirmation before sending.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "recipient": {
+                    "type": "string",
+                    "description": "Target contact name or username on Telegram."
+                },
+                "message": {
+                    "type": "string",
+                    "description": "The message body to send."
+                },
+                "command": {
+                    "type": "string",
+                    "description": "Optional raw user utterance command string."
+                }
+            },
+            "required": []
         }
     ),
 
@@ -734,8 +753,169 @@ _TOOLS: list[ToolDefinition] = [
     # ── External Application Pipeline Tools ──────────────────────────
 
     ToolDefinition(
-        name="open_telegram",
-        description="Launch Telegram desktop app or web interface securely via backend pipeline execution.",
+        name="open_telegram_web",
+        description="Launch Telegram Web client in Google Chrome.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Telegram Web URL."
+                }
+            },
+            "required": []
+        }
+    ),
+
+
+
+    ToolDefinition(
+        name="search_telegram_contact",
+        description="Search for a Telegram contact by name or username in Telegram Web UI.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "contact": {
+                    "type": "string",
+                    "description": "Name or username of the contact to search for."
+                }
+            },
+            "required": ["contact"]
+        }
+    ),
+
+    ToolDefinition(
+        name="verify_telegram_contact",
+        description="Verify search results for a Telegram contact and select target recipient.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "contact": {
+                    "type": "string",
+                    "description": "Contact name to verify."
+                }
+            },
+            "required": ["contact"]
+        }
+    ),
+
+    ToolDefinition(
+        name="open_telegram_chat",
+        description="Open the 1-on-1 conversation container for the verified Telegram Web contact.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "contact": {
+                    "type": "string",
+                    "description": "Contact name or identifier."
+                }
+            },
+            "required": []
+        }
+    ),
+
+    ToolDefinition(
+        name="verify_telegram_chat_header",
+        description="Verify top chat header in Telegram Web DOM matches the expected contact name.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "contact": {
+                    "type": "string",
+                    "description": "Expected contact name."
+                }
+            },
+            "required": []
+        }
+    ),
+
+    ToolDefinition(
+        name="focus_telegram_composer",
+        description="Focus the editable message input composer in Telegram Web UI.",
+        parameters={
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    ),
+
+    ToolDefinition(
+        name="type_telegram_message",
+        description="Type text into the verified active Telegram Web composer without sending.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "Draft message content to type."
+                }
+            },
+            "required": ["message"]
+        }
+    ),
+
+    ToolDefinition(
+        name="send_telegram_message",
+        description="Dispatch send key on focused Telegram Web composer to send prepared draft message.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "contact": {
+                    "type": "string",
+                    "description": "Target contact name (optional if already verified)."
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Message text (optional if already typed)."
+                }
+            },
+            "required": []
+        }
+    ),
+
+    ToolDefinition(
+        name="verify_telegram_message_sent",
+        description="Inspect Telegram Web chat DOM to verify outgoing message bubble delivery.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "Expected outgoing message text to verify."
+                }
+            },
+            "required": []
+        }
+    ),
+
+    ToolDefinition(
+        name="verify_telegram_message_bubble",
+        description="Inspect Telegram Web chat DOM to verify outgoing message bubble delivery.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "Expected outgoing message text to verify."
+                }
+            },
+            "required": []
+        }
+    ),
+
+    ToolDefinition(
+        name="close_telegram_tab",
+        description="Safely close or return focus from Telegram Web tab after verified send.",
+        parameters={
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    ),
+
+    ToolDefinition(
+        name="close_telegram",
+        description="Safely close or minimize Telegram after verified send.",
         parameters={
             "type": "object",
             "properties": {},

@@ -149,14 +149,16 @@ FEW_SHOT_EXAMPLES = [
     {
         "role": "assistant",
         "content": """{
-  "thought": "User wants to open Telegram. I invoke the open_telegram pipeline tool.",
+  "thought": "User wants to open Telegram. I will launch the Telegram application.",
   "steps": [
     {
-      "tool": "open_telegram",
-      "args": {}
+      "tool": "launch_application",
+      "args": {
+        "application": "Telegram"
+      }
     }
   ],
-  "response": "Opening Telegram for you."
+  "response": "Opening Telegram."
 }"""
     },
     {

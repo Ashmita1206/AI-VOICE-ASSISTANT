@@ -104,8 +104,13 @@ def run_pipeline(audio_path: str) -> dict[str, Any]:
     stt_ms = int((time.perf_counter() - t_stt) * 1000)
 
     transcription = stt_result["text"]
+    translated_text = stt_result.get("translated_text") or transcription
+    intent_input = translated_text or transcription
+
     if transcription.strip():
         print(f"\n Heard: \"{transcription}\"")
+        if translated_text != transcription:
+            print(f" Translation: \"{translated_text}\"")
         try:
             from agentic.memory.app_context import AppContextManager, get_active_window_info
             from agentic.memory.session_state import get_session
@@ -124,6 +129,7 @@ def run_pipeline(audio_path: str) -> dict[str, Any]:
         print("\nHeard: [Silent / No Speech Detected]")
         return {
             "transcription": "",
+            "translated_text": "",
             "stt": {
                 "model": config.STT_MODEL_ID,
                 "device": config.DEVICE,
@@ -143,7 +149,7 @@ def run_pipeline(audio_path: str) -> dict[str, Any]:
     # ── Step 2: Intent Classification (fast cross-check) ───────────
     classifier = get_classifier()
     t_intent = time.perf_counter()
-    command = classifier.classify(transcription)
+    command = classifier.classify(intent_input)
     intent_ms = int((time.perf_counter() - t_intent) * 1000)
     print(f"[INTENT] Detected: {command.intent} (Confidence: {round(command.confidence * 100, 1)}%)  [{intent_ms} ms]")
     print(f"[ENTITY] Detected: {command.entities}")
@@ -154,7 +160,7 @@ def run_pipeline(audio_path: str) -> dict[str, Any]:
     print(f"[REMOTE LLM] Sending to planner...")
     t_plan = time.perf_counter()
     planner = get_planner_manager()
-    planner_output = planner.plan(transcription)
+    planner_output = planner.plan(intent_input)
     plan_ms = int((time.perf_counter() - t_plan) * 1000)
     print(f"[REMOTE LLM] Plan received in {plan_ms} ms")
 
@@ -291,6 +297,7 @@ def run_pipeline(audio_path: str) -> dict[str, Any]:
     # ── Assemble Result ──────────────────────────────────────────────
     result = {
         "transcription": transcription,
+        "translated_text": translated_text,
         "stt": {
             "model": config.STT_MODEL_ID,
             "device": config.DEVICE,

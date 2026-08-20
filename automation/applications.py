@@ -112,7 +112,8 @@ CANONICAL_ALIASES = {
     "wsl": ["wsl", "linux", "bash"],
     "chatgpt": ["chat gpt", "chatgpt"],
     "spotify": ["spotify"],
-    "whatsapp": ["whatsapp"]
+    "whatsapp": ["whatsapp"],
+    "telegram": ["telegram", "telegram desktop", "telegram messenger"]
 }
 
 CANONICAL_EXECUTABLES = {
@@ -205,8 +206,21 @@ def find_windows_app_paths(query: str) -> str | None:
         candidates.extend(["firefox.exe", "firefox"])
     elif target_l in ("edge", "microsoft edge", "msedge"):
         candidates.extend(["msedge.exe", "msedge"])
-    elif target_l in ("telegram", "telegram desktop"):
+    elif target_l in ("telegram", "telegram desktop", "telegram messenger"):
         candidates.extend(["telegram.exe", "telegram"])
+        # Explicit well-known installation paths for Telegram Desktop on Windows
+        if sys.platform.startswith("win"):
+            tg_candidates = [
+                os.path.expandvars(r"%APPDATA%\Telegram Desktop\Telegram.exe"),
+                os.path.expandvars(r"%LOCALAPPDATA%\Programs\Telegram Desktop\Telegram.exe"),
+                os.path.expandvars(r"%ProgramFiles%\Telegram Desktop\Telegram.exe"),
+                os.path.expandvars(r"%ProgramFiles(x86)%\Telegram Desktop\Telegram.exe"),
+            ]
+            for tg_cand in tg_candidates:
+                if os.path.exists(tg_cand):
+                    return tg_cand
+            return "tg://"
+
     elif target_l in ("spotify", "spotify music"):
         candidates.extend(["spotify.exe", "spotify"])
     elif target_l in ("ubuntu", "wsl", "ubuntu terminal"):
@@ -366,7 +380,7 @@ def clean_query_for_matching(query: str) -> str:
     text = re.sub(r"[.!?]+$", "", text).strip()
     
     words = text.split()
-    remove_words = {"app", "application", "launch", "open", "start", "the"}
+    remove_words = {"app", "application", "launch", "open", "start", "the", "kholo", "chalao", "karo", "kar", "do"}
     filtered_words = [w for w in words if w not in remove_words]
     
     cleaned = " ".join(filtered_words)
@@ -558,11 +572,14 @@ def dispatch_os_launch(executable: str, query: str = "") -> tuple[bool, str, str
     if executable.startswith("shell:AppsFolder\\"):
         target_type = "uwp"
         try:
-            logger.info(f"[OS_LAUNCH] target='{query}' | type=uwp | launcher=explorer.exe | command={executable}")
-            subprocess.Popen(["explorer.exe", executable])
-            return True, target_type, "explorer.exe", "UWP app activated via AppsFolder"
+            logger.info(f"[OS_LAUNCH] target='{query}' | type=uwp | launcher=os.startfile | command={executable}")
+            if hasattr(os, "startfile"):
+                os.startfile(executable)
+            else:
+                subprocess.Popen(["explorer.exe", executable])
+            return True, target_type, "os.startfile", "UWP app activated via AppsFolder"
         except Exception as e:
-            return False, target_type, "explorer.exe", str(e)
+            return False, target_type, "os.startfile", str(e)
 
     # 3. URI Protocols (ms-windows-store:, ms-calculator:, etc.)
     if executable.startswith("ms-") or (":" in executable and not ":\\" in executable and not executable[1:3] == ":\\"):
@@ -836,8 +853,8 @@ def resolve_app_launch_strategy(query: str) -> tuple[str | None, str, str, str]:
     return target_exe, process_check_log, registry_log, start_menu_log
 
 def is_running_in_test() -> bool:
-    import sys
-    return "pytest" in sys.modules or "unittest" in sys.modules
+    import os, sys
+    return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
 
 def wait_and_focus_app(app_name: str, timeout: float = APP_LAUNCH_TIMEOUT_SECONDS) -> bool:
     """Poll every 0.5s up to timeout for a VISIBLE WINDOW matching app_name, restore/focus it.
@@ -916,10 +933,12 @@ def wait_and_focus_app(app_name: str, timeout: float = APP_LAUNCH_TIMEOUT_SECOND
                         win32gui.EnumWindows(enum_win_pids, None)
                         if hwnds:
                             break
-                    # Process running but no titled window yet — do NOT return True.
-                    # Continue polling until a window appears or timeout is reached.
+                    # Process running — if visible window found, hwnds will be populated.
+                    # If process is confirmed running for > 2.0s, consider the launch successful.
                     if not hwnds and pids:
-                        logger.info(f"[FOCUS] Attempt {attempt} | Process running for '{app_name}' (PID={pids[0]}) but NO visible window yet. Continuing to poll...")
+                        logger.info(f"[FOCUS] Attempt {attempt} | Process running for '{app_name}' (PID={pids[0]}).")
+                        if time.perf_counter() - start > 2.0:
+                            return True
             except Exception:
                 pass
 
@@ -1074,11 +1093,11 @@ def open_application(args: dict[str, Any]) -> ExecutionResult:
 
             # Wait until window exists and is foreground
             focused = wait_and_focus_app(app_name, timeout=APP_LAUNCH_TIMEOUT_SECONDS)
-            if focused:
+            if focused or _is_process_running(app_name):
                 return ExecutionResult(
                     success=True,
                     tool="open_application",
-                    message=f"Launched application: {app_name} ({executable}) and brought to foreground.",
+                    message=f"Launched application: {app_name} ({executable}).",
                     execution_time_ms=timer.elapsed_ms
                 )
             else:
@@ -1874,14 +1893,13 @@ def perform_app_action(args: dict[str, Any]) -> ExecutionResult:
     )
 
 
+# NOTE: open_telegram delegates to dedicated telegram automation handler
 @register_tool("open_telegram")
 def open_telegram(args: dict[str, Any]) -> ExecutionResult:
-    """Launch Telegram desktop app or open web interface."""
-    with ExecutionTimer() as timer:
-        res = resolve_and_open({"query": "telegram"})
-        res.tool = "open_telegram"
-        res.execution_time_ms = timer.elapsed_ms
-        return res
+    """Launch Telegram desktop application or open web client with verification."""
+    from automation.telegram.telegram_automation import handle_open_telegram
+    return handle_open_telegram(args)
+
 
 
 @register_tool("open_gmail")

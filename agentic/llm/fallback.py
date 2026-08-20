@@ -41,12 +41,12 @@ def apply_heuristic_fallback(transcription: str) -> PlannerOutput:
             steps=[PlannerStep(tool="launch_application", args={"application": "Chrome"})]
         )
 
-    if text in ("open telegram", "telegram", "launch telegram", "start telegram", "check telegram", "telegram open"):
+    if text in ("open telegram", "telegram", "launch telegram", "start telegram", "check telegram", "telegram open", "open telegram desktop", "telegram desktop", "telegram kholo", "telegram open karo", "telegram open kar do"):
         return PlannerOutput(
-            intent="open_telegram",
+            intent="open_application",
             confidence=0.95,
-            reasoning="Matched Telegram application pipeline tool.",
-            steps=[PlannerStep(tool="open_telegram", args={})]
+            reasoning="Matched Telegram desktop application launch.",
+            steps=[PlannerStep(tool="open_application", args={"application": "telegram"}, description="Open Telegram")]
         )
 
     if text in ("open gmail", "gmail", "check gmail", "check my gmail", "open my gmail", "launch gmail", "gmail open", "open my mail"):
@@ -213,6 +213,46 @@ def apply_heuristic_fallback(transcription: str) -> PlannerOutput:
                 PlannerStep(tool="press_key", args={"key": "enter"})
             ]
         )
+
+    # Rule 4b: Telegram Web browser messaging automation (decomposed sequence)
+    if "telegram" in clean_text and any(w in clean_text for w in ("send", "message", "tell", "text", "bhejo", "saying")):
+        if not re.match(r"^(open|launch|start|kholo|chalao)\s+telegram$", clean_text):
+            from automation.telegram.nlu import parse_telegram_input
+            res = parse_telegram_input("NEW_COMMAND", text)
+            contact = (getattr(res, "recipient_query", "") or "").strip()
+            msg = (getattr(res, "message_text", "") or "").strip()
+            
+            _PLACEHOLDERS = {"contact", "recipient", "{name}", "{contact}", "contact_name", "name", ""}
+            if not contact or contact.lower() in _PLACEHOLDERS:
+                return PlannerOutput(
+                    intent="send_telegram_message",
+                    confidence=0.0,
+                    reasoning="Entity resolution failure: recipient contact missing or placeholder literal.",
+                    steps=[]
+                )
+
+            if not msg or msg.lower() in {"message", "text", "{message}", ""}:
+                msg = "hello"
+
+            return PlannerOutput(
+                intent="send_telegram_message",
+                confidence=0.95,
+                reasoning=f"Matched Telegram messaging flow for '{contact}'.",
+                steps=[
+                    PlannerStep(tool="open_telegram", args={}, description="Open Telegram Desktop or Web"),
+                    PlannerStep(tool="search_telegram_contact", args={"contact": contact}, description=f"Search contact {contact}"),
+                    PlannerStep(tool="verify_telegram_contact", args={"contact": contact}, description=f"Verify candidate {contact}"),
+                    PlannerStep(tool="open_telegram_chat", args={"contact": contact}, description=f"Open chat with {contact}"),
+                    PlannerStep(tool="verify_telegram_chat_header", args={"contact": contact}, description=f"Verify active chat header for {contact}"),
+                    PlannerStep(tool="focus_telegram_composer", args={}, description="Focus Telegram message composer"),
+                    PlannerStep(tool="type_telegram_message", args={"message": msg}, description=f"Type message '{msg}'"),
+                    PlannerStep(tool="send_telegram_message", args={"contact": contact, "message": msg}, description="Dispatch send key on composer"),
+                    PlannerStep(tool="verify_telegram_message_sent", args={"message": msg}, description="Verify outgoing message bubble"),
+                    PlannerStep(tool="close_telegram_tab", args={}, description="Close Telegram session")
+                ]
+            )
+
+
 
     # Rule 5: Spotify automation (play/pause/resume)
     spotify_play_pattern = r"^(?:open\s+spotify\s+and\s+play|spotify\s+play|listen\s+to|play\s+song|play\s+music|play)\s+(.+)"

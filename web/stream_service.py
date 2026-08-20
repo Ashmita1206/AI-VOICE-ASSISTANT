@@ -23,22 +23,12 @@ from __future__ import annotations
 
 import json
 import os
-import sys
-import io
 import time
 import logging
 import queue
 import threading
 from datetime import datetime
 from typing import Any, Generator
-
-# Prevent UnicodeEncodeError on Windows stdout
-if sys.platform.startswith("win") and "pytest" not in sys.modules:
-    try:
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-    except Exception:
-        pass
 
 import config
 from web.services import get_stt, get_classifier, get_executor, _generate_tts_file
@@ -62,6 +52,8 @@ def validate_execution_plan(planner_output: PlannerOutput) -> str | None:
         return "Steps array does not exist in the plan."
         
     if len(planner_output.steps) == 0:
+        if planner_output.intent in ("chat", "conversational") and getattr(planner_output, "reasoning", None):
+            return None
         return "Planner produced no executable steps."
         
     seen_steps = set()
@@ -101,23 +93,11 @@ def _sse(stage: str, status: str, data: Any = None, message: str | None = None) 
     if message is not None:
         payload["message"] = message
     serialized = json.dumps(payload, ensure_ascii=False)
-    safe_serialized = serialized.encode("ascii", "replace").decode("ascii")
-    print("=" * 80)
-    print(f"[SSE DEBUG] EMITTING EVENT")
-    print(f"[SSE DEBUG] Stage: {stage}")
-    print(f"[SSE DEBUG] Status: {status}")
-    print(f"[SSE DEBUG] Message: {message}")
-    print(f"[SSE DEBUG] Data keys: {list(data.keys()) if data else 'None'}")
-    if stage == "execution" and status == "completed":
-        print(f"[SSE DEBUG] Execution data structure:")
-        if data and "steps" in data:
-            print(f"[SSE DEBUG] Steps count: {len(data['steps'])}")
-            for i, step in enumerate(data["steps"]):
-                print(f"[SSE DEBUG] Step {i}: tool={step.get('tool')}, requires_interaction={step.get('requires_interaction')}")
-                if step.get("data") and "results" in step.get("data", {}):
-                    print(f"[SSE DEBUG] Step {i} has results: {len(step['data'].get('results', []))}")
-    print(f"[SSE DEBUG] Payload (first 500 chars): {safe_serialized[:500]}")
-    print(f"[SSE DEBUG] Full payload length: {len(safe_serialized)}")
+    try:
+        safe_msg = message.encode("ascii", "replace").decode("ascii") if message else ""
+        logger.debug("[SSE] stage=%s status=%s msg=%s", stage, status, safe_msg)
+    except Exception:
+        pass
     return f"data: {serialized}\n\n"
 
 
@@ -141,6 +121,8 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
     # ── Step 1: STT ──────────────────────────────────────
     if text is not None:
         transcription = text
+        translated_text = text
+        intent_input = text
         stt_metrics = {
             "model": "text-input",
             "device": "cpu",
@@ -151,6 +133,7 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
         }
         yield _sse("transcript", "completed", data={
             "text": transcription,
+            "translated_text": translated_text,
             "stt": stt_metrics,
         })
     else:
@@ -163,7 +146,9 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
         stt_result = stt.transcribe(audio_path)
         stt_ms = int((time.perf_counter() - t_stt) * 1000)
         transcription = stt_result.get("text", "")
-        logger.info("[PIPELINE][STT] Stage DONE  latency_ms=%d  text=%r", stt_ms, transcription[:120])
+        translated_text = stt_result.get("translated_text") or transcription
+        intent_input = translated_text or transcription
+        logger.info("[PIPELINE][STT] Stage DONE  latency_ms=%d  text=%r  translated=%r", stt_ms, transcription[:120], translated_text[:120])
 
         stt_metrics = {
             "model": config.STT_MODEL_ID,
@@ -173,6 +158,11 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
             "confidence": round(stt_result.get("language_probability", 0) * 100, 1),
             "processing_time_ms": int(stt_result.get("processing_time", 0) * 1000),
         }
+        yield _sse("transcript", "completed", data={
+            "text": transcription,
+            "translated_text": translated_text,
+            "stt": stt_metrics,
+        })
 
     # Update app context silently
     if transcription.strip():
@@ -190,17 +180,13 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
         except Exception:
             pass
 
-    yield _sse("transcript", "completed", data={
-        "text": transcription,
-        "stt": stt_metrics,
-    })
-
     # ── Silent-audio fast-path ────────────────────────────────────────
     if not transcription.strip():
         no_speech_response = "I didn't catch that. Could you try again?"
         yield _sse("response", "completed", data={"text": no_speech_response})
         yield _sse("done", "no_speech", data={
             "transcription": "",
+            "translated_text": "",
             "stt": stt_metrics,
             "intent": {"name": "unknown", "confidence": 0},
             "entities": {},
@@ -215,9 +201,9 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
     yield _sse("intent", "processing", message="Classifying intent...")
 
     classifier = get_classifier()
-    logger.info("[PIPELINE][INTENT] Stage START  text=%r", transcription[:80])
+    logger.info("[PIPELINE][INTENT] Stage START  input=%r", intent_input[:80])
     t_intent = time.perf_counter()
-    command = classifier.classify(transcription)
+    command = classifier.classify(intent_input)
     intent_ms = int((time.perf_counter() - t_intent) * 1000)
     logger.info("[PIPELINE][INTENT] Stage DONE  intent=%s  confidence=%.1f%%  entities=%s  latency_ms=%d",
                 command.intent, command.confidence * 100, command.entities, intent_ms)
@@ -239,7 +225,7 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
 
     # ── Step 5: Planning ─────────────────────────────────────
     yield _sse("planner", "processing", message="Building execution plan...")
-    logger.info("[PIPELINE][PLANNER] Stage START  transcription=%r", transcription[:80])
+    logger.info("[PIPELINE][PLANNER] Stage START  input=%r", intent_input[:80])
     t_plan = time.perf_counter()
 
     from agentic.llm.manager import get_planner_manager
@@ -247,7 +233,7 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
     from agentic.schemas import ExecutionPlan, ActionStep
 
     planner = get_planner_manager()
-    planner_output: PlannerOutput = planner.plan(transcription)
+    planner_output: PlannerOutput = planner.plan(intent_input)
     plan_ms = int((time.perf_counter() - t_plan) * 1000)
     logger.info("[PIPELINE][PLANNER] Stage DONE  latency_ms=%d  steps=%d  intent=%s",
                 plan_ms, len(planner_output.steps), planner_output.intent)
@@ -262,16 +248,9 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
     permissions = plan_dict_to_dict.get("permissions", [])
     proceed_enabled = (validation_error is None)
 
-    print("-------------------------------------------------")
-    print("[BACKEND PLAN VALIDATION LOGS]")
-    print(f"Planner Output: {json.dumps(plan_dict_to_dict, indent=2)}")
-    print(f"Validated Plan: {proceed_enabled}")
-    print(f"Steps Count: {steps_count}")
-    print(f"Permissions: {permissions}")
-    print(f"Proceed Enabled = {proceed_enabled}")
+    logger.info("[BACKEND PLAN VALIDATION] Validated: %s | Steps: %d | Proceed: %s", proceed_enabled, steps_count, proceed_enabled)
     if validation_error:
-        print(f"Reason if false: {validation_error}")
-    print("-------------------------------------------------")
+        logger.warning("[BACKEND PLAN VALIDATION] Reason: %s", validation_error)
 
     if validation_error:
         yield _sse("planner", "failed", data={
@@ -307,8 +286,9 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
     }
     _is_document_action = (
         planner_output.intent in _DOCUMENT_BYPASS_INTENTS
-        or all(s.tool in _DOCUMENT_BYPASS_TOOLS for s in planner_output.steps)
+        or (len(planner_output.steps) > 0 and all(s.tool in _DOCUMENT_BYPASS_TOOLS for s in planner_output.steps))
     )
+
 
     if _is_document_action and len(planner_output.steps) > 0:
         logger.info("[PIPELINE] Document intent detected — bypassing confirmation gate")
@@ -355,6 +335,53 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
 
             _doc_exec_results = _doc_results_holder[0] if _doc_results_holder else []
             yield _sse("execution", "completed", data={"steps": _doc_exec_results})
+
+            # Check if any executed step requested step-level confirmation (e.g. verify_telegram_contact or type_telegram_message)
+            req_step_res = next((r for r in _doc_exec_results if r.get("requires_confirmation")), None)
+            if req_step_res:
+                logger.info("[PIPELINE] Execution paused for step-level confirmation: tool=%s", req_step_res.get("tool"))
+                executed_tools = [r.get("tool") for r in _doc_exec_results]
+                remaining_steps = []
+                found_pause = False
+                for s in planner_output.steps:
+                    if found_pause:
+                        remaining_steps.append({"tool": s.tool, "args": s.args})
+                    elif s.tool == req_step_res.get("tool"):
+                        found_pause = True
+
+                remaining_plan = {
+                    "intent": planner_output.intent,
+                    "thought": planner_output.reasoning,
+                    "steps": remaining_steps,
+                }
+
+                from agentic.memory.pending_action import PendingActionManager
+                confirmation_id = PendingActionManager.save(remaining_plan)
+
+                req_data = req_step_res.get("data", {})
+                confirm_type = req_data.get("confirmation_type", "telegram_confirmation")
+                contact_val = req_data.get("contact", command.entities.get("contact", ""))
+                msg_val = req_data.get("message", command.entities.get("message", ""))
+                prompt_msg = req_data.get("message_prompt") or req_step_res.get("message") or f"Confirm action for {contact_val}"
+
+                yield _sse("done", "requires_confirmation", data={
+                    "status": "requires_confirmation",
+                    "transcription": transcription,
+                    "confirmation": {
+                        "id": confirmation_id,
+                        "confirmation_type": confirm_type,
+                        "contact": contact_val,
+                        "message": prompt_msg,
+                        "message_text": msg_val,
+                        "plan": planner_output.to_dict(),
+                        "remaining_seconds": 60,
+                    },
+                    "intent": {"name": planner_output.intent, "confidence": round(planner_output.confidence * 100, 1)},
+                    "entities": command.entities,
+                    "planner": planner_output.to_dict(),
+                    "pipeline_time_ms": int((time.perf_counter() - pipeline_start) * 1000),
+                })
+                return
 
             # Response generation
             yield _sse("response", "processing", message="Generating assistant response…")
@@ -421,6 +448,8 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
     plan_dict = {
         "intent": planner_output.intent,
         "thought": planner_output.reasoning,
+        "confirmation_type": "execution_plan",
+        "phase": "execution_plan",
         "steps": [
             {"tool": s.tool, "args": s.args} for s in planner_output.steps
         ],
@@ -438,16 +467,16 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
         args = s.args or {}
         
         # Map tools to permissions
-        if tool in ("open_telegram", "open_gmail", "open_spotify"):
+        if tool in ("open_gmail", "open_spotify"):
             permissions.append("Network Access")
             permissions.append("System Control")
         elif tool in ("press_key", "type_text", "hotkey"):
             permissions.append("Keyboard Control")
         elif tool in ("click", "double_click", "right_click", "scroll", "drag"):
             permissions.append("Mouse Control")
-        elif tool in ("launch_application", "focus_window", "close_window", "is_app_running", "activate_window"):
+        elif tool in ("launch_application", "open_application", "focus_window", "close_window", "is_app_running", "activate_window"):
             permissions.append("Foreground Window Control")
-        elif tool in ("open_browser", "open_website", "open_whatsapp"):
+        elif tool in ("open_browser", "open_website", "open_whatsapp", "open_telegram_web"):
             permissions.append("Browser Automation")
         elif tool in ("search_inside_application", "perform_app_action"):
             permissions.append("Accessibility/UI Automation")
@@ -457,13 +486,13 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
             permissions.append("File System Access")
             
         # Human-friendly action descriptions
-        if tool == "open_telegram":
-            estimated_actions.append("Open Telegram Application/Web")
+        if tool == "open_telegram_web":
+            estimated_actions.append("Open Telegram Web")
         elif tool == "open_gmail":
             estimated_actions.append("Open Gmail Service")
         elif tool == "open_spotify":
             estimated_actions.append("Open Spotify Music Player")
-        elif tool == "launch_application":
+        elif tool in ("launch_application", "open_application"):
             estimated_actions.append(f"Open {args.get('application', 'application')}")
             estimated_actions.append(f"Open {args.get('application', 'application')}")
         elif tool == "search_inside_application":
@@ -491,8 +520,10 @@ def run_pipeline_stream(audio_path: str | None = None, text: str | None = None) 
         "transcription": transcription,
         "confirmation": {
             "id": confirmation_id,
+            "confirmation_type": "execution_plan",
             "message": f"I will perform these actions to execute your request: '{transcription}'",
             "plan": planner_output.to_dict(),
+            "steps": planner_output.to_dict().get("steps", []),
             "permissions": permissions,
             "estimated_actions": estimated_actions,
             "remaining_seconds": 60,
@@ -514,7 +545,7 @@ def run_confirmation_stream(confirmation_id: str, edited_steps: list[dict] | Non
     import threading
     
     session = get_session()
-    pending_data = PendingActionManager.get_pending_action()
+    pending_data = PendingActionManager.claim(confirmation_id)
     
     if not pending_data or pending_data.get("id") != confirmation_id:
         yield _sse("done", "error", message="Pending action timed out or not found.")
@@ -529,13 +560,36 @@ def run_confirmation_stream(confirmation_id: str, edited_steps: list[dict] | Non
         session.clear_pending_action()
         yield _sse("done", "error", message="Pending action plan is empty.")
         return
+
+    # Validate edited plan steps if modified by user
+    if edited_steps is not None:
+        from agentic.llm.schemas import PlannerOutput, PlannerStep
+        valid_steps = []
+        for s in edited_steps:
+            if not isinstance(s, dict) or "tool" not in s:
+                PendingActionManager.clear()
+                session.clear_pending_action()
+                yield _sse("done", "error", message="Invalid step format in edited plan.")
+                return
+            valid_steps.append(PlannerStep(tool=s["tool"], args=s.get("args", {}), description=s.get("description")))
+        temp_output = PlannerOutput(
+            intent=saved_plan.get("intent", "custom"),
+            confidence=1.0,
+            reasoning="User-edited plan",
+            steps=valid_steps
+        )
+        val_err = validate_execution_plan(temp_output)
+        if val_err:
+            PendingActionManager.clear()
+            session.clear_pending_action()
+            yield _sse("done", "error", message=f"Edited plan validation failed: {val_err}")
+            return
         
-    # Clear pending action state
-    PendingActionManager.clear()
+    # The pending plan was atomically claimed above, preventing replay.
     session.clear_pending_action()
     
     plan_steps = [
-        ActionStep(tool=s["tool"], args=s["args"])
+        ActionStep(tool=s["tool"], args=s.get("args", {}))
         for s in steps_list
     ]
     plan = ExecutionPlan(
@@ -549,13 +603,32 @@ def run_confirmation_stream(confirmation_id: str, edited_steps: list[dict] | Non
     for _si, _s in enumerate(plan_steps, 1):
         logger.info("[PIPELINE][EXEC]   Step %d: tool=%s  args=%s", _si, _s.tool, _s.args)
     
+    # Set Telegram state tokens from the explicit phase that was approved.
+    # First-tool inference is retained only for legacy pending files.
+    approved_confirmation_type = saved_plan.get("confirmation_type")
+    if not approved_confirmation_type and plan_steps:
+        if plan_steps[0].tool in ("open_telegram_chat", "open_chat"):
+            approved_confirmation_type = "telegram_contact_confirmation"
+        elif plan_steps[0].tool in ("send_telegram_message", "type_telegram_message"):
+            approved_confirmation_type = "telegram_send_confirmation"
+
+    if approved_confirmation_type == "telegram_contact_confirmation":
+        from automation.telegram.telegram_automation import set_telegram_contact_confirmed
+        set_telegram_contact_confirmed(True)
+        logger.info("[TELEGRAM_CONFIRM] Contact confirmation approved — set contact_confirmed=True")
+    elif approved_confirmation_type == "telegram_send_confirmation":
+        from automation.telegram.telegram_automation import set_telegram_send_confirmed
+        set_telegram_send_confirmed(True)
+        logger.info("[TELEGRAM_CONFIRM] Send confirmation approved — set send_confirmed=True")
+
     yield _sse("execution", "running", message="Starting execution...")
     logger.info(f"Dispatching plan with {len(plan_steps)} steps to executor...")
     
     try:
         executor = DesktopExecutor()
-        executor.bypass_confirmation = True  # Bypass individual step prompts since the entire plan is approved
+        executor.bypass_confirmation = True
     except Exception as exc:
+
         logger.exception("Failed to initialize DesktopExecutor")
         yield _sse("execution", "failed", message=f"Executor init failed: {exc}")
         yield _sse("done", "error", data={"error": str(exc)})
@@ -602,9 +675,69 @@ def run_confirmation_stream(confirmation_id: str, edited_steps: list[dict] | Non
         return
         
     exec_results = exec_results_holder[0] if exec_results_holder else []
-    print(f"[SSE DEBUG] Execution results holder: {len(exec_results_holder)} results")
-    print(f"[SSE DEBUG] Yielding execution completed with {len(exec_results)} steps")
+    logger.debug("[SSE] Execution results holder: %d results, yielding %d steps", len(exec_results_holder), len(exec_results))
     yield _sse("execution", "completed", data={"steps": exec_results})
+
+    # Check if any step in resumed execution requested a step-level confirmation (e.g. type_telegram_message for Phase 2)
+    req_step_res = next((r for r in exec_results if r.get("requires_confirmation")), None)
+    if req_step_res:
+        logger.info("[PIPELINE] Execution paused during resume for step confirmation: tool=%s", req_step_res.get("tool"))
+        remaining_steps = []
+        found_pause = False
+        for s in plan_steps:
+            if found_pause:
+                remaining_steps.append({"tool": s.tool, "args": s.args})
+            elif s.tool == req_step_res.get("tool"):
+                found_pause = True
+
+        req_data = req_step_res.get("data", {})
+        confirm_type = req_data.get("confirmation_type", "telegram_send_confirmation")
+        contact_val = req_data.get("contact", "")
+        msg_val = req_data.get("message", "")
+        remaining_plan = {
+            "intent": saved_plan.get("intent", "send_telegram_message"),
+            "thought": saved_plan.get("thought", "Executing Telegram flow"),
+            "confirmation_type": confirm_type,
+            "phase": confirm_type,
+            "steps": remaining_steps,
+        }
+        new_conf_id = PendingActionManager.save(remaining_plan)
+
+        yield _sse("done", "requires_confirmation", data={
+            "status": "requires_confirmation",
+            "transcription": saved_plan.get("thought", ""),
+            "confirmation": {
+                "id": new_conf_id,
+                "confirmation_type": confirm_type,
+                "contact": contact_val,
+                "message": req_data.get("message_prompt") or req_step_res.get("message") or f"Send '{msg_val}' to {contact_val}?",
+                "message_text": msg_val,
+                "plan": saved_plan,
+                "remaining_seconds": 60,
+            },
+            "intent": {"name": saved_plan.get("intent", "send_telegram_message"), "confidence": 100},
+            "entities": {},
+            "planner": saved_plan,
+            "pipeline_time_ms": 0,
+        })
+        return
+
+    if not exec_results and plan_steps:
+        failure_message = "Approved plan produced no execution results."
+        yield _sse("execution", "failed", message=failure_message)
+        yield _sse("done", "error", data={"error": failure_message})
+        return
+
+    failed_step = next((result for result in exec_results if not result.get("success", False)), None)
+    if failed_step:
+        failure_message = failed_step.get("message") or f"Execution failed at {failed_step.get('tool', 'unknown step')}."
+        yield _sse("execution", "failed", data={"step": failed_step}, message=failure_message)
+        yield _sse("done", "error", data={
+            "error": failure_message,
+            "intent": saved_plan.get("intent", "execute_confirmed"),
+            "execution": exec_results,
+        })
+        return
     
     # Step 7: Response Generation + TTS
     yield _sse("response", "processing", message="Generating assistant response…")

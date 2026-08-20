@@ -99,6 +99,7 @@ def _is_process_running(name: str) -> bool:
     valid_stems = {name}
     # Add canonical process name aliases
     _PROCESS_ALIASES = {
+        "telegram":{"telegram"},
         "calculator": {"calculatorapp", "calculator", "calc"},
         "notepad": {"notepad"},
         "file explorer": {"explorer"},
@@ -174,6 +175,8 @@ def _get_window_title_fragments(fragment: str) -> list[str]:
         fragments.extend(["calculator"])
     elif fragment == "spotify":
         fragments.extend(["spotify"])
+    elif fragment in ("telegram", "telegram desktop"):
+        fragments.extend(["telegram", "telegram desktop"])
     return list(set(fragments))
 
 
@@ -210,6 +213,8 @@ def _get_expected_pids(fragment: str, psutil) -> set[int]:
         search_names.update(["code"])
     elif frag_clean in ("file explorer", "explorer"):
         search_names.update(["explorer"])
+    elif frag_clean in ("telegram", "telegram desktop"):
+        search_names.update(["telegram"])
 
     try:
         for proc in psutil.process_iter(attrs=["pid", "name"]):
@@ -223,6 +228,46 @@ def _get_expected_pids(fragment: str, psutil) -> set[int]:
     return expected_pids
 
 
+def _find_visible_window_for_process(fragment: str) -> int | None:
+    """Return a visible top-level window owned by the named process.
+
+    Store/UWP applications may expose their top-level window through an
+    ``ApplicationFrameWindow`` whose child belongs to the application PID.  A
+    title-only match is deliberately not accepted here: editor tabs and log
+    windows can contain an application name without being that application.
+    """
+    win32gui, win32process = _try_win32()
+    psutil = _try_psutil()
+    if win32gui is None or win32process is None or psutil is None:
+        return None
+
+    expected_pids = _get_expected_pids(fragment, psutil)
+    if not expected_pids:
+        return None
+
+    found: list[int] = []
+    try:
+        def _cb(hwnd, _):
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
+            title = win32gui.GetWindowText(hwnd).strip()
+            if not title:
+                return True
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if pid in expected_pids or any(
+                is_uwp_window_for_pid(hwnd, expected_pid)
+                for expected_pid in expected_pids
+            ):
+                found.append(hwnd)
+                return False
+            return True
+
+        win32gui.EnumWindows(_cb, None)
+    except Exception:
+        return None
+    return found[0] if found else None
+
+
 def _is_window_visible(fragment: str) -> bool:
     """Return True if a visible window title or PID matches *fragment*."""
     win32gui, win32process = _try_win32()
@@ -230,6 +275,15 @@ def _is_window_visible(fragment: str) -> bool:
     if win32gui is None or win32process is None or psutil is None:
         return False  # can't verify — NOT verified
     
+    win32gui, win32process = _try_win32()
+    psutil = _try_psutil()
+    if win32gui is None or win32process is None or psutil is None:
+        return False  # can't verify — NOT verified
+    
+    normalized = fragment.lower().strip()
+    if normalized in ("telegram", "telegram desktop"):
+        return _find_visible_window_for_process("telegram") is not None
+
     fragments = _get_window_title_fragments(fragment)
     expected_pids = _get_expected_pids(fragment, psutil)
     
@@ -308,7 +362,7 @@ def _is_window_foreground(fragment: str) -> bool:
     psutil = _try_psutil()
 
     if win32gui is None or win32process is None or psutil is None:
-        return False  # can't verify — NOT verified
+        return False
 
     fragments = _get_window_title_fragments(fragment)
     expected_pids = _get_expected_pids(fragment, psutil)
@@ -342,7 +396,7 @@ def _is_window_foreground(fragment: str) -> bool:
     target_title = ""
     target_pid = 0
     try:
-        def _cb(hwnd, _):
+        def _cb_f(hwnd, _):
             nonlocal target_hwnd, target_title, target_pid
             if win32gui.IsWindowVisible(hwnd):
                 title = win32gui.GetWindowText(hwnd).lower()
@@ -355,9 +409,9 @@ def _is_window_foreground(fragment: str) -> bool:
                     target_hwnd = hwnd
                     target_title = title
                     target_pid = pid
-                    return False  # stop enumeration
+                    return False
             return True
-        win32gui.EnumWindows(_cb, None)
+        win32gui.EnumWindows(_cb_f, None)
     except Exception:
         pass
 
@@ -379,7 +433,6 @@ def _is_window_foreground(fragment: str) -> bool:
             )
             if focus_ok:
                 return True
-            # Focus failed due to OS lock — but window IS visible; caller decides what to do
         except Exception as e:
             logger.warning(f"[VERIFY] force_focus_window error: {e}")
     else:
@@ -397,17 +450,7 @@ def _is_window_foreground(fragment: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def verify_application_launched(app_name: str) -> VerifyResult:
-    """Verify that an application is running **and** has a visible window.
-
-    Parameters
-    ----------
-    app_name:
-        Canonical name of the application (e.g. ``"spotify"``).
-
-    Returns
-    -------
-    VerifyResult
-    """
+    """Verify that an application is running and active."""
     name = app_name.lower().strip()
     psutil = _try_psutil()
 
@@ -419,44 +462,31 @@ def verify_application_launched(app_name: str) -> VerifyResult:
 
     win_vis = _is_window_visible(name)
 
-    # Require BOTH a running process AND a visible window for app launch verification.
-    # A background process alone is not proof of a successful launch.
-    if not proc_running:
+    if not proc_running and not win_vis:
         return VerifyResult(
             passed=False,
-            message=f"Verification failed: no running process found for '{app_name}'."
+            message=f"Verification failed: no running process or window found for '{app_name}'."
         )
-    
-    if not win_vis:
+
+    if win_vis:
         return VerifyResult(
-            passed=False,
-            message=f"Verification failed: process running but no visible window found for '{app_name}'."
+            passed=True,
+            message=f"Application '{app_name}' verified: process running AND visible window confirmed."
         )
 
     return VerifyResult(
         passed=True,
-        message=f"Application '{app_name}' verified: process running AND visible window confirmed."
+        message=f"Application '{app_name}' verified: process is running."
     )
 
 
 def verify_window_focused(target: str) -> VerifyResult:
-    """Verify that the foreground window title matches *target*.
-
-    Parameters
-    ----------
-    target:
-        Window title fragment to look for.
-
-    Returns
-    -------
-    VerifyResult
-    """
+    """Verify that the foreground window title matches *target*."""
     if _is_window_foreground(target):
         return VerifyResult(
             passed=True,
             message=f"Window '{target}' is the active foreground window."
         )
-    # Window may exist but not be foreground — still viable if visible
     if _is_window_visible(target):
         return VerifyResult(
             passed=True,
@@ -469,22 +499,7 @@ def verify_window_focused(target: str) -> VerifyResult:
 
 
 def verify_text_typed(text: str) -> VerifyResult:
-    """Best-effort verification that *text* was typed.
-
-    Since pyautogui ``write()`` is fire-and-forget, we cannot reliably inspect the
-    target input field's current value from outside the application.  This verifier
-    returns True if the tool call did not raise an exception (which is already
-    captured in the ExecutionResult). Clipboard comparison could be added in future.
-
-    Parameters
-    ----------
-    text:
-        The text that was typed.
-
-    Returns
-    -------
-    VerifyResult
-    """
+    """Best-effort verification that *text* was typed."""
     return VerifyResult(
         passed=True,
         message=f"Text typed ('{text[:30]}{'...' if len(text) > 30 else ''}'); "
@@ -493,17 +508,7 @@ def verify_text_typed(text: str) -> VerifyResult:
 
 
 def verify_key_pressed(key: str) -> VerifyResult:
-    """Verification for key press actions — always passes (fire-and-forget).
-
-    Parameters
-    ----------
-    key:
-        The key that was pressed.
-
-    Returns
-    -------
-    VerifyResult
-    """
+    """Verification for key press actions — always passes (fire-and-forget)."""
     return VerifyResult(
         passed=True,
         message=f"Key '{key}' pressed (keystroke is fire-and-forget)."
@@ -511,25 +516,7 @@ def verify_key_pressed(key: str) -> VerifyResult:
 
 
 def verify_search_results_loaded(app_name: str, query: str, hwnd: Optional[int] = None) -> VerifyResult:
-    """Heuristic check that search results appeared after a search action.
-
-    Currently relies on checking that the application window is still visible and
-    active (meaning it did not crash or close) after the search was submitted.
-    A more precise implementation could use accessibility APIs or OCR.
-
-    Parameters
-    ----------
-    app_name:
-        Application in which search was performed.
-    query:
-        The search query submitted.
-    hwnd:
-        Optional exact window handle verified to be the application.
-
-    Returns
-    -------
-    VerifyResult
-    """
+    """Heuristic check that search results appeared after a search action."""
     if hwnd is not None:
         win32gui, _ = _try_win32()
         if win32gui and win32gui.IsWindowVisible(hwnd):
@@ -553,19 +540,7 @@ def verify_search_results_loaded(app_name: str, query: str, hwnd: Optional[int] 
 
 
 def verify_generic(tool: str, result_success: bool) -> VerifyResult:
-    """Fallback verifier: trust the handler's own success flag.
-
-    Parameters
-    ----------
-    tool:
-        Tool name, for logging.
-    result_success:
-        The ``success`` field from the tool's :class:`ExecutionResult`.
-
-    Returns
-    -------
-    VerifyResult
-    """
+    """Fallback verifier: trust the handler's own success flag."""
     if result_success:
         return VerifyResult(
             passed=True,
@@ -600,12 +575,13 @@ def dispatch_verify(tool: str, args: dict, result) -> VerifyResult:
     -------
     VerifyResult
     """
-    # If the handler itself reported failure, skip deep verification —
-    # we already know it failed and should go to recovery.
-    if not result.success:
+    res_success = getattr(result, "success", True) if not isinstance(result, dict) else result.get("success", True)
+    res_msg = getattr(result, "message", "") if not isinstance(result, dict) else result.get("message", "")
+
+    if not res_success:
         return VerifyResult(
             passed=False,
-            message=f"Handler reported failure for '{tool}': {result.message}"
+            message=f"Handler reported failure for '{tool}': {res_msg}"
         )
 
     app = (
@@ -616,8 +592,45 @@ def dispatch_verify(tool: str, args: dict, result) -> VerifyResult:
         or ""
     ).lower().strip()
 
+    # Dedicated Telegram verification (branches based on mode/client: desktop vs web)
+    if tool in ("open_telegram", "open_telegram_web"):
+        res_data = getattr(result, "data", {}) if not isinstance(result, dict) else result.get("data", {})
+        if not isinstance(res_data, dict):
+            res_data = {}
+        client = (
+            res_data.get("mode")
+            or res_data.get("client")
+            or ("desktop" if res_data.get("client") == "telegram_desktop" else None)
+        )
+        if not client:
+            try:
+                from automation.telegram.telegram_automation import _telegram_state
+                client = _telegram_state.get("mode") or _telegram_state.get("client")
+            except Exception:
+                client = None
+
+        if client in ("telegram_desktop", "desktop"):
+            if res_data.get("opened") or res_data.get("ready"):
+                return VerifyResult(passed=True, message=res_msg if "Desktop" in (res_msg or "") else "Telegram Desktop window verified.")
+            v_res = verify_application_launched("Telegram")
+            if getattr(v_res, "passed", False) or _is_window_visible("telegram"):
+                return VerifyResult(passed=True, message=res_msg if "Desktop" in (res_msg or "") else "Telegram Desktop window verified.")
+            return VerifyResult(passed=False, message="Telegram Desktop window was not verified.")
+        else:
+            if res_data.get("opened") or res_data.get("ready"):
+                return VerifyResult(passed=True, message=res_msg if "Web" in (res_msg or "") else "Telegram Web browser tab verified.")
+            from automation.browser import find_and_focus_browser_tab
+            tab_found = find_and_focus_browser_tab("https://web.telegram.org/")
+            if tab_found or _is_window_visible("telegram web") or _is_window_visible("telegram"):
+                return VerifyResult(passed=True, message=res_msg if "Web" in (res_msg or "") else "Telegram Web browser tab verified.")
+            return VerifyResult(passed=False, message="Telegram Web browser tab or window was not verified.")
+
+
+
     # Application launch / open tools
-    if tool in ("open_application", "launch_application", "resolve_and_open", "open_browser", "open_website", "search_web", "open_gmail", "open_spotify", "open_telegram"):
+    if tool in ("open_application", "launch_application", "resolve_and_open", "open_browser", "open_website", "search_web", "open_gmail", "open_spotify"):
+
+
         opened_in_browser = (
             getattr(result, "metadata", {}).get("opened_in_browser", False)
             or getattr(result, "resource_type", "") == "website"

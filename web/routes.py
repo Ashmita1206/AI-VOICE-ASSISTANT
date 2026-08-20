@@ -57,7 +57,8 @@ def transcribe():
 @api.route("/transcribe_stream", methods=["POST"])
 def transcribe_stream():
     """Receive audio or text and stream pipeline progress as Server-Sent Events."""
-    text_input = request.form.get("text")
+    json_data = request.get_json(silent=True) or {}
+    text_input = request.form.get("text") or json_data.get("text")
     if text_input:
         def generate_text_stream():
             try:
@@ -74,6 +75,7 @@ def transcribe_stream():
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
                 "Connection": "keep-alive",
+                "Content-Type": "text/event-stream; charset=utf-8",
             },
         )
 
@@ -114,6 +116,7 @@ def transcribe_stream():
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
+            "Content-Type": "text/event-stream; charset=utf-8",
         },
     )
 
@@ -211,6 +214,7 @@ def confirm():
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
                 "Connection": "keep-alive",
+                "Content-Type": "text/event-stream; charset=utf-8",
             },
         )
     except Exception as e:
