@@ -27,6 +27,7 @@ function SuccessCheckmark() {
 
 export function LiveExecutionVisualizer({
   transcript,
+  translatedText,
   accuracy,
   intent,
   entities,
@@ -54,10 +55,15 @@ export function LiveExecutionVisualizer({
         hasData = !!transcript;
         isActive = isProcessing && !transcript;
         break;
+      case 'translation':
+        isComplete = !!translatedText;
+        hasData = !!translatedText;
+        isActive = !!transcript && !translatedText && isProcessing;
+        break;
       case 'accuracy':
         isComplete = !!accuracy;
         hasData = !!accuracy;
-        isActive = !!transcript && !accuracy && isProcessing;
+        isActive = !!translatedText && !accuracy && isProcessing;
         break;
       case 'intent':
         isComplete = !!intent;
@@ -67,12 +73,12 @@ export function LiveExecutionVisualizer({
       case 'entities':
         isComplete = entities !== null && entities !== undefined;
         hasData = entities !== null && entities !== undefined;
-        isActive = !!intent && !hasData && isProcessing;
+        isActive = !!intent && (entities === null || entities === undefined) && isProcessing;
         break;
       case 'planner':
         isComplete = !!plannerOutput;
         hasData = !!plannerOutput;
-        isActive = !!intent && !plannerOutput && isProcessing;
+        isActive = (entities !== null && entities !== undefined) && !plannerOutput && isProcessing;
         break;
       case 'execution': {
         const hasLogs = Array.isArray(executionLogs) && executionLogs.length > 0;
@@ -87,35 +93,30 @@ export function LiveExecutionVisualizer({
         });
         isComplete = hasLogs && !isProcessing && !hasFailedLog;
         hasData = hasLogs;
-        isActive = hasLogs && isProcessing;
+        isActive = !!plannerOutput && (!Array.isArray(executionLogs) || executionLogs.length === 0) && isProcessing;
         isFailed = hasFailedLog && !isProcessing;
         break;
       }
       case 'response':
         isComplete = !!responseText;
         hasData = !!responseText;
-        isActive = false;
+        isActive = Array.isArray(executionLogs) && executionLogs.length > 0 && !responseText && isProcessing;
+        break;
+      default:
         break;
     }
 
     return { ...cfg, isComplete, isActive, hasData, isFailed };
   });
 
-  // Auto-advance to the latest active/completed phase as backend streams, unless user manually chose a tab
+  // Auto-advance tab to the latest active/completed phase (unless user manually selected a tab)
   useEffect(() => {
-    if (!userSelected) {
-      const activePhase = phases.find((p) => p.isActive);
-      if (activePhase) {
-        setSelectedTab(activePhase.key);
-      } else {
-        // Pick the latest completed phase with data
-        const completedWithData = [...phases].reverse().find((p) => p.hasData);
-        if (completedWithData) {
-          setSelectedTab(completedWithData.key);
-        }
-      }
+    if (userSelected) return;
+    const activePhase = [...phases].reverse().find((p) => p.hasData || p.isActive);
+    if (activePhase) {
+      setSelectedTab(activePhase.key);
     }
-  }, [transcript, accuracy, intent, entities, plannerOutput, executionLogs, responseText, isProcessing, userSelected]);
+  }, [transcript, translatedText, accuracy, intent, entities, plannerOutput, executionLogs, responseText, isProcessing, userSelected]);
 
   const handleTabClick = (key) => {
     setSelectedTab(key);
@@ -130,6 +131,17 @@ export function LiveExecutionVisualizer({
       <Card title="🎙️ Transcript" badge={<Badge variant="success"><SuccessCheckmark /></Badge>}>
         <div style={{ fontSize: '0.95rem', color: 'var(--text-primary)', lineHeight: 1.6, fontWeight: 500 }}>
           "{text || 'No transcript available'}"
+        </div>
+      </Card>
+    );
+  };
+
+  const renderTranslationCard = () => {
+    const text = typeof translatedText === 'object' ? (translatedText.translated_text || translatedText.text || JSON.stringify(translatedText)) : translatedText;
+    return (
+      <Card title="🌐 English Translation" badge={<Badge variant="success"><SuccessCheckmark /></Badge>}>
+        <div style={{ fontSize: '0.95rem', color: 'var(--text-primary)', lineHeight: 1.6, fontWeight: 500 }}>
+          "{text || 'No translation available'}"
         </div>
       </Card>
     );
@@ -412,7 +424,12 @@ export function LiveExecutionVisualizer({
   const renderStepContent = (key) => {
     switch (key) {
       case 'transcript':
-        return transcript ? renderTranscriptCard() : renderEmptyStepCard('🎙️ Transcript', 'Speech-to-text transcript is processing or pending input...');
+        return transcript ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {renderTranscriptCard()}
+            {translatedText && renderTranslationCard()}
+          </div>
+        ) : renderEmptyStepCard('🎙️ Transcript', 'Speech-to-text transcript is processing or pending input...');
       case 'accuracy':
         return accuracy ? renderAccuracyCard() : renderEmptyStepCard('📊 Metrics & Accuracy', 'STT performance metrics pending transcription completion...');
       case 'intent':
@@ -519,6 +536,7 @@ export function LiveExecutionVisualizer({
         /* Stacked View showing all completed/active steps in order */
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {transcript && renderTranscriptCard()}
+          {translatedText && renderTranslationCard()}
           {accuracy && renderAccuracyCard()}
           {intent && renderIntentCard()}
           {(entities !== null && entities !== undefined) && renderEntitiesCard()}

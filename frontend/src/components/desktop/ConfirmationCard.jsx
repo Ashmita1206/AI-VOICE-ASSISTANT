@@ -10,6 +10,7 @@ export function ConfirmationCard({ confirmationData, onDecision, onStreamEvent }
     setIsEditingPlan,
     editedPlanJson,
     setEditedPlanJson,
+    isSubmitting,
     submitDecision,
   } = useConfirmation(confirmationData, onStreamEvent);
 
@@ -27,65 +28,95 @@ export function ConfirmationCard({ confirmationData, onDecision, onStreamEvent }
     if (onDecision) onDecision('cancel');
   };
 
+  const isContactConfirm = confirmationData.confirmation_type === 'telegram_confirmation' || confirmationData.confirmation_type === 'telegram_contact_confirmation' || confirmationData.confirmation_type === 'contact_disambiguation';
+  const isSendConfirm = confirmationData.confirmation_type === 'telegram_send_confirmation' || confirmationData.confirmation_type === 'final_send_confirmation';
+  const isPlanExecutionConfirm = !isContactConfirm && !isSendConfirm;
+
+  const approveLabel = isSendConfirm ? 'Send Message' : (isContactConfirm ? 'Yes, Continue' : 'Approve & Execute');
+  const cancelLabel = isSendConfirm ? 'Cancel' : 'No / Cancel';
+
+  const summaryText = confirmationData.message || confirmationData.summary || confirmationData.action || 'I will perform these actions to execute your request:';
+  const stepsToDisplay = confirmationData.steps || confirmationData.plan?.steps || [];
+
   return (
     <div className="glass-card animate-fade-in" style={{
-      border: '1px solid #ffe082',
-      backgroundColor: 'var(--surface-yellow-soft)',
+      border: isContactConfirm || isSendConfirm ? '1px solid #0088cc' : '1px solid var(--border-soft)',
+      backgroundColor: isContactConfirm || isSendConfirm ? 'rgba(0, 136, 204, 0.08)' : 'rgba(255, 255, 255, 0.03)',
       marginBottom: '20px',
-      padding: '20px'
+      padding: '20px',
+      borderRadius: '12px'
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--warning-text)', marginBottom: '12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: isContactConfirm || isSendConfirm ? '#0088cc' : 'var(--warning-text, #f59e0b)', marginBottom: '12px' }}>
         <AlertTriangle size={22} />
-        <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Confirmation Required</h3>
+        <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>
+          {isSendConfirm ? '✈️ Telegram Send Confirmation' : (isContactConfirm ? '👤 Telegram Contact Confirmation' : 'Confirmation Required')}
+        </h3>
       </div>
 
-      <div style={{ fontSize: '0.95rem', color: 'var(--text-primary)', marginBottom: '12px' }}>
-        <strong>Action:</strong> {confirmationData.summary || confirmationData.action}
+      <div style={{ fontSize: '1.05rem', color: 'var(--text-primary)', marginBottom: '16px', fontWeight: 600 }}>
+        {summaryText}
       </div>
 
-      {!isEditingPlan ? (
-        <div style={{ marginBottom: '16px' }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '6px' }}>Planned Execution Steps:</div>
-          <pre className="json-pre">
-            {JSON.stringify(confirmationData.steps || [], null, 2)}
-          </pre>
-        </div>
-      ) : (
-        <div style={{ marginBottom: '16px' }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '6px' }}>Edit Execution Steps (JSON):</div>
-          <textarea
-            value={editedPlanJson}
-            onChange={(e) => setEditedPlanJson(e.target.value)}
-            style={{
-              width: '100%',
-              height: '160px',
-              padding: '10px',
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.85rem',
-              backgroundColor: 'var(--surface-primary)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border-soft)',
-              borderRadius: 'var(--radius-sm)',
-              outline: 'none'
-            }}
-          />
+      {isContactConfirm && confirmationData.candidates && confirmationData.candidates.length > 1 && (
+        <div style={{ marginBottom: '16px', padding: '12px', background: 'rgba(0, 136, 204, 0.05)', borderRadius: '8px', border: '1px solid rgba(0, 136, 204, 0.2)' }}>
+          <div style={{ fontSize: '0.85rem', color: '#0088cc', marginBottom: '8px', fontWeight: 600 }}>Available Contacts:</div>
+          <ol style={{ paddingLeft: '20px', margin: 0, color: 'var(--text-primary)', fontSize: '0.95rem' }}>
+            {confirmationData.candidates.map((c, i) => (
+              <li key={i} style={{ marginBottom: '4px' }}>
+                {typeof c === 'string' ? c : (c.name || c.display_name || JSON.stringify(c))}
+              </li>
+            ))}
+          </ol>
         </div>
       )}
 
+      {isPlanExecutionConfirm && (
+        !isEditingPlan ? (
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: 600 }}>Planned Execution Steps:</div>
+            <pre className="json-pre">
+              {JSON.stringify(stepsToDisplay, null, 2)}
+            </pre>
+          </div>
+        ) : (
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: 600 }}>Edit Execution Steps (JSON):</div>
+            <textarea
+              value={editedPlanJson}
+              onChange={(e) => setEditedPlanJson(e.target.value)}
+              style={{
+                width: '100%',
+                height: '160px',
+                padding: '10px',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.85rem',
+                backgroundColor: 'var(--surface-primary)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-soft)',
+                borderRadius: 'var(--radius-sm)',
+                outline: 'none'
+              }}
+            />
+          </div>
+        )
+      )}
+
       <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '16px' }}>
-        <Button onClick={handleApprove} variant="primary" icon={CheckCircle}>
-          Approve & Execute
+        <Button onClick={handleApprove} variant="primary" icon={CheckCircle} isLoading={isSubmitting} disabled={isSubmitting}>
+          {approveLabel}
         </Button>
-        <Button onClick={handleCancel} variant="danger" icon={XCircle}>
-          Cancel
+        <Button onClick={handleCancel} variant="danger" icon={XCircle} disabled={isSubmitting}>
+          {cancelLabel}
         </Button>
-        <Button
-          onClick={() => setIsEditingPlan(!isEditingPlan)}
-          variant="secondary"
-          icon={Edit3}
-        >
-          {isEditingPlan ? 'View Plan' : 'Edit Plan'}
-        </Button>
+        {isPlanExecutionConfirm && (
+          <Button
+            onClick={() => setIsEditingPlan(!isEditingPlan)}
+            variant="secondary"
+            icon={Edit3}
+          >
+            {isEditingPlan ? 'View Plan' : 'Edit Plan'}
+          </Button>
+        )}
       </div>
 
       {/* Countdown Timer Bar */}

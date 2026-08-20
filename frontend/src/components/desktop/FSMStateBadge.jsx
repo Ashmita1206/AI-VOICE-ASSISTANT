@@ -19,6 +19,7 @@ export function FSMStateBadge({ fsmState }) {
       case 'completed':
         return 'success';
       case 'failed':
+      case 'cancelled':
         return 'danger';
       default:
         return 'info';

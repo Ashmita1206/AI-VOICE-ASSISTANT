@@ -29,8 +29,11 @@ export default function App() {
 
   const {
     fsmState,
+    setFsmState,
     statusMessage,
+    setStatusMessage,
     transcript,
+    translatedText,
     accuracy,
     intent,
     entities,
@@ -39,6 +42,7 @@ export default function App() {
     responseText,
     audioUrl,
     isProcessing,
+    setIsProcessing,
     confirmationData,
     setConfirmationData,
     fileSearchData,
@@ -66,6 +70,7 @@ export default function App() {
   const isTerminalState =
     fsmState === 'Completed' ||
     fsmState === 'Failed' ||
+    fsmState === 'Cancelled' ||
     completionPopup !== null ||
     (Boolean(responseText || executionLogs.length > 0) && !isProcessing);
 
@@ -109,14 +114,19 @@ export default function App() {
     (decision) => {
       if (decision === 'cancel') {
         setConfirmationData(null);
+        setFsmState('Cancelled');
+        setStatusMessage('Cancelled');
+        setIsProcessing(false);
       }
     },
-    [setConfirmationData]
+    [setConfirmationData, setFsmState, setStatusMessage, setIsProcessing]
   );
 
   const handleConfirmStreamEvent = useCallback(
     (eventData) => {
-      setConfirmationData(null);
+      if (eventData?.stage !== 'confirmation' && eventData?.status !== 'requires_confirmation') {
+        setConfirmationData(null);
+      }
       if (handleEventData) {
         handleEventData(eventData);
       }
@@ -210,6 +220,7 @@ export default function App() {
 
                 <LiveExecutionVisualizer
                   transcript={transcript}
+                  translatedText={translatedText}
                   accuracy={accuracy}
                   intent={intent}
                   entities={entities}
