@@ -62,7 +62,7 @@ export default function App() {
   useEffect(() => {
     if (audioUrl && audioPlayerRef.current) {
       audioPlayerRef.current.src = audioUrl;
-      audioPlayerRef.current.play().catch(() => {});
+      audioPlayerRef.current.play().catch(() => { });
     }
   }, [audioUrl]);
 
@@ -102,6 +102,13 @@ export default function App() {
   const handleQuickCommand = useCallback(
     (text) => {
       sendPipelineRequest({ textInput: text });
+    },
+    [sendPipelineRequest]
+  );
+
+  const handleFileUpload = useCallback(
+    (file) => {
+      sendPipelineRequest({ audioBlob: file });
     },
     [sendPipelineRequest]
   );
@@ -187,6 +194,7 @@ export default function App() {
               />
               <TextInput
                 onSubmitText={handleQuickCommand}
+                onFileUpload={handleFileUpload}
                 isProcessing={isProcessing || isRecording}
               />
             </div>
