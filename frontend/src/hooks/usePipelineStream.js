@@ -320,7 +320,8 @@ export function usePipelineStream() {
 
     const formData = new FormData();
     if (audioBlob) {
-      formData.append('audio', audioBlob, 'recording.webm');
+      const filename = audioBlob instanceof File && audioBlob.name ? audioBlob.name : 'recording.webm';
+      formData.append('audio', audioBlob, filename);
     } else if (textInput) {
       formData.append('text', textInput);
     } else {
