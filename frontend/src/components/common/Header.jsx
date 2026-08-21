@@ -24,18 +24,45 @@ export function Header({ activeTab, setActiveTab }) {
         alignItems: 'center',
         justifyContent: 'space-between',
       }}>
-        {/* Title + Green Online Status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <h1 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0, letterSpacing: '-0.01em' }}>
-            AI Voice Assistant
-          </h1>
-          <span style={{
-            width: '8px',
-            height: '8px',
-            borderRadius: '50%',
-            backgroundColor: 'var(--success-text)',
-            boxShadow: '0 0 6px rgba(46, 125, 50, 0.4)'
-          }} title="System Ready" />
+        {/* Brand: Minimal Logo + Buddy + Subtitle + Online Status */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {/* Minimal Rounded Logo Icon */}
+          <div style={{
+            width: '28px',
+            height: '28px',
+            borderRadius: '8px',
+            background: 'var(--accent-blue-strong)',
+            color: '#FFFFFF',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 2px 8px rgba(37, 99, 235, 0.25)',
+            flexShrink: 0,
+          }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="22" />
+            </svg>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>
+                Buddy
+              </span>
+              <span style={{
+                width: '7px',
+                height: '7px',
+                borderRadius: '50%',
+                backgroundColor: 'var(--success-text)',
+                boxShadow: '0 0 6px rgba(46, 125, 50, 0.4)'
+              }} title="System Ready" />
+            </div>
+            <span style={{ fontSize: '0.68rem', fontWeight: 500, color: 'var(--text-secondary)', letterSpacing: '0.01em' }}>
+              Your Voice Assistant
+            </span>
+          </div>
         </div>
 
         {/* Right side: Nav tabs */}

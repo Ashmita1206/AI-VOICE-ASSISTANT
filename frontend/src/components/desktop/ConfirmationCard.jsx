@@ -49,7 +49,7 @@ export function ConfirmationCard({ confirmationData, onDecision, onStreamEvent }
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: isContactConfirm || isSendConfirm ? '#0088cc' : 'var(--warning-text, #f59e0b)', marginBottom: '12px' }}>
         <AlertTriangle size={22} />
         <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>
-          {isSendConfirm ? '✈️ Telegram Send Confirmation' : (isContactConfirm ? '👤 Telegram Contact Confirmation' : 'Confirmation Required')}
+          {isSendConfirm ? 'Telegram Send Confirmation' : (isContactConfirm ? 'Telegram Contact Confirmation' : 'Confirmation Required')}
         </h3>
       </div>
 
