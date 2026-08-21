@@ -18,9 +18,8 @@ const PHASE_CONFIG = [
 
 function SuccessCheckmark() {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--success-text)', fontSize: '0.8rem', fontWeight: 700 }}>
-      <CheckCircle2 size={16} />
-      <span>✓</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--success-text)', fontSize: '0.8rem', fontWeight: 600 }}>
+      <CheckCircle2 size={15} />
     </div>
   );
 }
@@ -128,7 +127,7 @@ export function LiveExecutionVisualizer({
   const renderTranscriptCard = () => {
     const text = typeof transcript === 'object' ? (transcript.text || transcript.transcription || JSON.stringify(transcript)) : transcript;
     return (
-      <Card title="🎙️ Transcript" badge={<Badge variant="success"><SuccessCheckmark /></Badge>}>
+      <Card title="Transcript" badge={<Badge variant="success"><SuccessCheckmark /></Badge>}>
         <div style={{ fontSize: '0.95rem', color: 'var(--text-primary)', lineHeight: 1.6, fontWeight: 500 }}>
           "{text || 'No transcript available'}"
         </div>
@@ -139,7 +138,7 @@ export function LiveExecutionVisualizer({
   const renderTranslationCard = () => {
     const text = typeof translatedText === 'object' ? (translatedText.translated_text || translatedText.text || JSON.stringify(translatedText)) : translatedText;
     return (
-      <Card title="🌐 English Translation" badge={<Badge variant="success"><SuccessCheckmark /></Badge>}>
+      <Card title="English Translation" badge={<Badge variant="success"><SuccessCheckmark /></Badge>}>
         <div style={{ fontSize: '0.95rem', color: 'var(--text-primary)', lineHeight: 1.6, fontWeight: 500 }}>
           "{text || 'No translation available'}"
         </div>
@@ -172,7 +171,7 @@ export function LiveExecutionVisualizer({
     }
 
     return (
-      <Card title="📊 Accuracy & Metrics" badge={<Badge variant="info">STT ✓</Badge>}>
+      <Card title="Accuracy & Metrics" badge={<Badge variant="info">STT</Badge>}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
           {[
             { label: 'Model', value: model, color: 'var(--text-primary)' },
@@ -204,7 +203,7 @@ export function LiveExecutionVisualizer({
     }
 
     return (
-      <Card title="🎯 Intent" badge={<Badge variant="info">NLP ✓</Badge>}>
+      <Card title="Intent" badge={<Badge variant="info">NLP</Badge>}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Detected Intent:</span>
           <span style={{
@@ -235,7 +234,7 @@ export function LiveExecutionVisualizer({
       : (Array.isArray(entities) ? entities.map((item, idx) => [idx, typeof item === 'object' ? JSON.stringify(item) : String(item)]) : []);
 
     return (
-      <Card title="🏷️ Entities & Parameters" badge={<Badge variant="info">Extracted ✓</Badge>}>
+      <Card title="Entities & Parameters" badge={<Badge variant="info">Extracted</Badge>}>
         {entEntries.length > 0 ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
             {entEntries.map(([key, value]) => (
@@ -276,7 +275,7 @@ export function LiveExecutionVisualizer({
     const steps = planData?.steps || planData?.plan?.steps || planData?.actions || [];
 
     return (
-      <Card title="📋 Planner Execution Plan" badge={<Badge variant="warning">Scheduled ✓</Badge>}>
+      <Card title="Execution Plan" badge={<Badge variant="warning">Scheduled</Badge>}>
         {reasoning && (
           <div style={{
             fontSize: '0.85rem',
@@ -346,7 +345,7 @@ export function LiveExecutionVisualizer({
   const renderExecutionCard = () => {
     const logs = Array.isArray(executionLogs) ? executionLogs : [];
     return (
-      <Card title="⚙️ Execution Logs" badge={<Badge variant={isProcessing ? "warning" : "success"} pulse={isProcessing}>{isProcessing ? 'Running...' : 'Complete ✓'}</Badge>}>
+      <Card title="Execution Logs" badge={<Badge variant={isProcessing ? "warning" : "success"} pulse={isProcessing}>{isProcessing ? 'Running...' : 'Complete'}</Badge>}>
         {logs.length > 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {logs.map((log, idx) => {
@@ -388,7 +387,7 @@ export function LiveExecutionVisualizer({
   const renderResponseCard = () => {
     const text = typeof responseText === 'object' ? (responseText.text || responseText.message || JSON.stringify(responseText)) : responseText;
     return (
-      <Card title="✨ Assistant Response" badge={<Badge variant="success"><SuccessCheckmark /></Badge>}>
+      <Card title="Response" badge={<Badge variant="success"><SuccessCheckmark /></Badge>}>
         <div style={{ fontSize: '0.95rem', color: 'var(--text-primary)', lineHeight: 1.6, fontWeight: 500 }}>
           {text || 'Response generated.'}
         </div>
@@ -429,19 +428,19 @@ export function LiveExecutionVisualizer({
             {renderTranscriptCard()}
             {translatedText && renderTranslationCard()}
           </div>
-        ) : renderEmptyStepCard('🎙️ Transcript', 'Speech-to-text transcript is processing or pending input...');
+        ) : renderEmptyStepCard('Transcript', 'Speech-to-text transcript is processing or pending input...');
       case 'accuracy':
-        return accuracy ? renderAccuracyCard() : renderEmptyStepCard('📊 Metrics & Accuracy', 'STT performance metrics pending transcription completion...');
+        return accuracy ? renderAccuracyCard() : renderEmptyStepCard('Metrics & Accuracy', 'STT performance metrics pending transcription completion...');
       case 'intent':
-        return intent ? renderIntentCard() : renderEmptyStepCard('🎯 Intent', 'Intent classification pending STT completion...');
+        return intent ? renderIntentCard() : renderEmptyStepCard('Intent', 'Intent classification pending STT completion...');
       case 'entities':
-        return (entities !== null && entities !== undefined) ? renderEntitiesCard() : renderEmptyStepCard('🏷️ Entities & Parameters', 'Entity extraction pending intent classification...');
+        return (entities !== null && entities !== undefined) ? renderEntitiesCard() : renderEmptyStepCard('Entities & Parameters', 'Entity extraction pending intent classification...');
       case 'planner':
-        return plannerOutput ? renderPlannerCard() : renderEmptyStepCard('📋 Planner Execution Plan', 'Execution planner generating step-by-step plan...');
+        return plannerOutput ? renderPlannerCard() : renderEmptyStepCard('Execution Plan', 'Execution planner generating step-by-step plan...');
       case 'execution':
-        return (Array.isArray(executionLogs) && executionLogs.length > 0) ? renderExecutionCard() : renderEmptyStepCard('⚙️ Execution Logs', 'Action execution logs pending plan confirmation...');
+        return (Array.isArray(executionLogs) && executionLogs.length > 0) ? renderExecutionCard() : renderEmptyStepCard('Execution Logs', 'Action execution logs pending plan confirmation...');
       case 'response':
-        return responseText ? renderResponseCard() : renderEmptyStepCard('✨ Assistant Response', 'Assistant response text and TTS audio generating...');
+        return responseText ? renderResponseCard() : renderEmptyStepCard('Response', 'Assistant response text and TTS audio generating...');
       default:
         return null;
     }
@@ -496,8 +495,6 @@ export function LiveExecutionVisualizer({
                   <Icon size={14} color={phase.isActive ? phase.color : 'var(--text-muted)'} style={phase.isActive ? { animation: 'pulse-ring 1.8s infinite' } : {}} />
                 )}
                 <span>{phase.label}</span>
-                {phase.isFailed && <span style={{ color: 'var(--error-text)', fontSize: '0.75rem', fontWeight: 800 }}>✕</span>}
-                {phase.isComplete && <span style={{ color: 'var(--success-text)', fontSize: '0.75rem', fontWeight: 800 }}>✓</span>}
               </button>
             );
           })}
